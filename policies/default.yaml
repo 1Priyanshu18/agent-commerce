@@ -1,0 +1,52 @@
+# Deterministic policy config. Compiled once at boot (see policy/compiler.py); a malformed
+# rule here must fail boot, never silently degrade into a permissive runtime.
+#
+# Rule shape: exactly one condition key (allow_if / deny_if / require_approval_if /
+# transform_if) per rule, evaluated against argument-level values (not just actor+tool_name).
+# `reason` is a human-readable template interpolated against real values at check time —
+# never hand-write a human_reason at a call site elsewhere in the codebase.
+version: 1
+
+# Fail-closed timeout for REQUIRE_APPROVAL verdicts: a pending approval older than this many
+# seconds auto-resolves to denied (see policy/approvals.py: ApprovalStore.expire_overdue()).
+approval_timeout_seconds: 300
+
+budget:
+  ceiling_source: session.buyer_budget_paise
+
+merchant:
+  max_discount_pct: 15
+  min_margin_pct: 12
+  blacklist_skus: [SKU-0042]
+
+rules:
+  - id: budget_ceiling
+    "on": [checkout.confirm]
+    deny_if: "cart.total_paise > session.buyer_budget_paise"
+    machine_reason: BUDGET_CEILING_EXCEEDED
+    reason: "cart total {cart.total} exceeds buyer budget ceiling {session.buyer_budget}"
+
+  - id: discount_cap
+    "on": [upsell.make_offer, cart.accept_upsell]
+    transform_if: "offer.discount_pct > merchant.max_discount_pct"
+    transform: "clamp(offer.discount_pct, merchant.max_discount_pct)"
+    machine_reason: DISCOUNT_CAPPED
+    reason: "discount {offer.discount_pct}% capped to merchant maximum {merchant.max_discount_pct}%"
+
+  - id: margin_floor
+    "on": [cart.accept_upsell]
+    deny_if: "cart.projected_margin_pct < merchant.min_margin_pct"
+    machine_reason: MARGIN_BELOW_FLOOR
+    reason: "projected margin {cart.projected_margin_pct}% below floor {merchant.min_margin_pct}%"
+
+  - id: high_value_review
+    "on": [checkout.confirm]
+    require_approval_if: "cart.total_paise > 500000"
+    machine_reason: HIGH_VALUE_REVIEW_REQUIRED
+    reason: "cart total {cart.total} exceeds auto-approval threshold; queued for human review"
+
+  - id: blacklist
+    "on": [cart.add]
+    deny_if: "product.sku in merchant.blacklist_skus"
+    machine_reason: SKU_BLACKLISTED
+    reason: "{product.sku} is not available for agent-initiated purchase"

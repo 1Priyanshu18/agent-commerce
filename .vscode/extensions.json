@@ -1,0 +1,10 @@
+{
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "charliermarsh.ruff",
+    "qwtel.sqlite-viewer",
+    "redhat.vscode-yaml",
+    "tamasfe.even-better-toml"
+  ]
+}

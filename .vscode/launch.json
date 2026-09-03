@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "FastAPI: agent_commerce.api.main",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["agent_commerce.api.main:app", "--reload"],
+      "justMyCode": true
+    },
+    {
+      "name": "Eval runner",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/eval/runner.py",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}
