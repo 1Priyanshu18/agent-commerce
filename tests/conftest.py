@@ -1,3 +1,5 @@
+import json
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -44,3 +46,28 @@ def mcp_stack(tmp_path) -> SimpleNamespace:
         buyer_mcp=buyer_mcp,
         merchant_mcp=merchant_mcp,
     )
+
+
+@pytest.fixture
+def make_catalog(tmp_path) -> Callable[[list[dict]], CatalogStore]:
+    """Factory for a CatalogStore over a small, hand-picked set of products (with exact,
+    known margins) rather than the full generated fixture — useful wherever a test needs
+    precise, deterministic assertions about margin math.
+    """
+
+    def _make(products: list[dict]) -> CatalogStore:
+        path = tmp_path / f"catalog_{len(products)}_{id(products)}.json"
+        full_products = [
+            {
+                "description": p.get("description", p["name"]),
+                "variants": None,
+                "tags": [],
+                "age_range": None,
+                **p,
+            }
+            for p in products
+        ]
+        path.write_text(json.dumps(full_products), encoding="utf-8")
+        return CatalogStore(path)
+
+    return _make

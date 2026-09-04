@@ -80,5 +80,44 @@ ruff check .
   `role_violation` ledger entry on any mismatch rather than just erroring silently.
 - **`orchestrator/session.py`** — `SessionRegistry`, an in-memory `transaction_id -> Cart`
   map shared by both servers (so a cart item added via the buyer server is visible to the
-  merchant server's checkout-time read). Not the orchestrator's full session state machine
-  yet — that arrives once there's a buyer agent decision loop to drive it.
+  merchant server's checkout-time read).
+- **`core/llm/`** — a provider-agnostic LLM layer. Nothing outside this package imports a
+  vendor SDK. `LLMClient` (a `Protocol`) and normalized types (`Message`, `ToolSpec`,
+  `ToolChoice`, `ToolCall`, `LLMResponse`) are what every call site works against; adapters
+  (`anthropic.py`, `gemini.py`, `groq.py`, and `fake.py` for tests) translate to/from each
+  provider's actual wire format. `CachingLLMClient` (disk-backed, keyed by a hash of the full
+  request) and `GuardedLLMClient` (rate limiting, retry/backoff, a hard per-run call budget)
+  wrap any adapter. `LLM_PROVIDER` selects the active one — Gemini is the development default
+  (free tier); Anthropic is kept for a final paid run once the harness works.
+- **`agents/buyer/`** — the buyer agent. `constraints.py` extracts a typed `BuyerConstraints`
+  (hard budget ceiling vs. soft target) from a natural-language goal via a forced tool call.
+  `agent.py` drives a real multi-turn tool-use loop against the buyer MCP server. `output.py`
+  is the ACCEPT/DECLINE/COUNTER decision contract for upsell responses: forced tool call
+  first, the AgenticPay structured-marker syntax as fallback, fail-closed to DECLINE if both
+  fail.
+- **`orchestrator/run_session.py`** — `BuyerSessionRunner`, the session state machine. The
+  only module that calls `policy/` and `payments/`: it intercepts the buyer agent's proposed
+  `cart.add`/`checkout.confirm` tool calls, runs a policy check *before* forwarding them to
+  the real MCP tool, and calls the payment layer (currently `payments/stub.py`, a deterministic
+  stand-in for the real Razorpay integration) only on an ALLOW verdict.
+- **`orchestrator/negotiation.py`** — the small-gap heuristic and round-cap tracking for
+  upsell negotiation, deliberately implemented in code rather than left to the prompt (the
+  AgenticPay paper found frontier models fail to converge on small price gaps on their own).
+- **`agents/upsell/`** — three interchangeable upsell strategies behind one `UpsellStrategy`
+  protocol (`decide(cart, rules) -> Offer | NoOffer`), swappable by config for the eval grid:
+  - `none.py` — baseline A, never offers.
+  - `rules.py` — baseline B, deterministic: picks the highest-margin in-stock complement,
+    discount = min(needed, cap), where "needed" is the deepest discount that product's margin
+    can sustain while staying at or above the merchant's margin floor, and "cap" is the
+    merchant's own discount-policy ceiling.
+  - `llm.py` — condition C: an LLM picks from the same candidate pool the rules strategy
+    uses (a fair comparison), and must justify its decision whether or not it makes an offer.
+    Forced tool call, fail-closed to NoOffer on any parse failure or hallucinated SKU.
+  - `dark_patterns.py` — a cheap, CPU-only keyword check (false scarcity, countdown pressure,
+    guilt framing) run over the LLM strategy's reasoning and logged when it fires, so
+    dark-pattern avoidance is a measured rate rather than an asserted property.
+  - `harness.py` — `run_comparison()`, a small reusable helper that runs the same cart
+    through several strategies and reports margin outcomes side by side (not the Phase 8 eval
+    harness — just enough to demonstrate the three strategies are genuinely interchangeable).
+  Strategies are pure functions of `(cart, rules)`; session-level rules like "one offer per
+  session" are enforced by whatever drives the session, not by the strategy itself.
