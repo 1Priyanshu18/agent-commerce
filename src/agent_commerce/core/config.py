@@ -13,6 +13,14 @@ load_dotenv()
 class Config:
     app_env: str
     log_level: str
+    llm_provider: str
+    gemini_api_key: str
+    gemini_model: str
+    groq_api_key: str
+    groq_model: str
+    anthropic_api_key: str
+    anthropic_model: str
+    llm_max_calls_per_run: int
 
 
 @lru_cache
@@ -20,4 +28,12 @@ def load_config() -> Config:
     return Config(
         app_env=os.environ.get("APP_ENV", "development"),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
+        llm_provider=os.environ.get("LLM_PROVIDER", "gemini"),
+        gemini_api_key=os.environ.get("GEMINI_API_KEY", ""),
+        gemini_model=os.environ.get("GEMINI_MODEL", "gemini-3.6-flash"),
+        groq_api_key=os.environ.get("GROQ_API_KEY", ""),
+        groq_model=os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+        anthropic_model=os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
+        llm_max_calls_per_run=int(os.environ.get("LLM_MAX_CALLS_PER_RUN", "200")),
     )
