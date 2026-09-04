@@ -22,6 +22,10 @@ class PolicyService:
         self._ledger = ledger
         self._approvals = approvals
 
+    @property
+    def policy_version(self) -> str:
+        return self._engine.policy_version
+
     def check(
         self,
         *,

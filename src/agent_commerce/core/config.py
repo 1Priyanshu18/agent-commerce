@@ -21,6 +21,12 @@ class Config:
     anthropic_api_key: str
     anthropic_model: str
     llm_max_calls_per_run: int
+    payment_mode: str
+    razorpay_key_id: str
+    razorpay_key_secret: str
+    razorpay_webhook_secret: str
+    reconcile_poll_interval_seconds: int
+    data_dir: str
 
 
 @lru_cache
@@ -36,4 +42,10 @@ def load_config() -> Config:
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
         anthropic_model=os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
         llm_max_calls_per_run=int(os.environ.get("LLM_MAX_CALLS_PER_RUN", "200")),
+        payment_mode=os.environ.get("PAYMENT_MODE", "simulated"),
+        razorpay_key_id=os.environ.get("RAZORPAY_KEY_ID", ""),
+        razorpay_key_secret=os.environ.get("RAZORPAY_KEY_SECRET", ""),
+        razorpay_webhook_secret=os.environ.get("RAZORPAY_WEBHOOK_SECRET", ""),
+        reconcile_poll_interval_seconds=int(os.environ.get("RECONCILE_POLL_INTERVAL_SECONDS", "30")),
+        data_dir=os.environ.get("DATA_DIR", "data"),
     )

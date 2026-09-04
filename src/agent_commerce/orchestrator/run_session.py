@@ -19,7 +19,7 @@ from agent_commerce.agents.buyer.constraints import BuyerConstraints
 from agent_commerce.core.llm import Message, ToolSpec
 from agent_commerce.ledger.models import ActionType, Actor, PolicyVerdict
 from agent_commerce.ledger.store import LedgerStore
-from agent_commerce.payments.stub import StubPaymentAdapter
+from agent_commerce.payments.adapter import PaymentAdapter
 from agent_commerce.policy.service import PolicyService
 
 from .session import SessionRegistry
@@ -38,10 +38,10 @@ def _tool_specs_from_fastmcp(fastmcp_tools: list[Any]) -> list[ToolSpec]:
 class SessionResult:
     transaction_id: str
     constraints: BuyerConstraints
-    # "checked_out" | "policy_denied" | "pending_approval" | "no_purchase" | "turn_limit_reached"
+    # "order_created" | "policy_denied" | "pending_approval" | "no_purchase" | "turn_limit_reached"
     outcome: str
     cart_view: dict | None
-    payment: dict | None
+    order: dict | None
     turns_used: int
     denial_reason: str | None = None
 
@@ -55,7 +55,7 @@ class BuyerSessionRunner:
         sessions: SessionRegistry,
         ledger: LedgerStore,
         policy: PolicyService,
-        payment: StubPaymentAdapter,
+        payment: PaymentAdapter,
     ) -> None:
         self._agent = agent
         self._buyer_mcp = buyer_mcp
@@ -100,7 +100,7 @@ class BuyerSessionRunner:
         ]
 
         cart_view: dict | None = None
-        payment_info: dict | None = None
+        order_info: dict | None = None
         denial_reason: str | None = None
         outcome = "no_purchase"
         turns_used = 0
@@ -135,10 +135,10 @@ class BuyerSessionRunner:
                     denial_reason = result.get("human_reason")
                     outcome = "pending_approval"
                     stop_loop = True
-                elif gate_outcome == "checked_out":
+                elif gate_outcome == "order_created":
                     cart_view = result.get("cart")
-                    payment_info = result.get("payment")
-                    outcome = "checked_out"
+                    order_info = result.get("order")
+                    outcome = "order_created"
                     stop_loop = True
 
             if stop_loop:
@@ -151,7 +151,7 @@ class BuyerSessionRunner:
             constraints=constraints,
             outcome=outcome,
             cart_view=cart_view,
-            payment=payment_info,
+            order=order_info,
             turns_used=turns_used,
             denial_reason=denial_reason,
         )
@@ -197,11 +197,15 @@ class BuyerSessionRunner:
         if tool_name == "checkout.confirm":
             cart_view = output.get("cart", {})
             amount_paise = cart_view.get("total_paise", 0)
-            payment = self._payment.pay(transaction_id=transaction_id, amount_paise=amount_paise)
-            payment_output = {
-                "status": payment.status.value,
-                "order_id": payment.order_id,
-                "payment_id": payment.payment_id,
+            order = self._payment.create_order(
+                transaction_id=transaction_id,
+                amount_paise=amount_paise,
+                policy_version=self._policy.policy_version,
+            )
+            order_output = {
+                "order_id": order.order_id,
+                "status": order.status.value,
+                "receipt": order.receipt,
             }
             self._ledger.append(
                 transaction_id=transaction_id,
@@ -209,9 +213,10 @@ class BuyerSessionRunner:
                 actor=Actor.PAYMENT_LAYER,
                 action_type=ActionType.PAYMENT_CALL,
                 input={"amount_paise": amount_paise},
-                output=payment_output,
+                output=order_output,
+                reasoning_summary=f"created order {order.order_id} for {amount_paise} paise",
             )
-            output["payment"] = payment_output
-            return output, "checked_out"
+            output["order"] = order_output
+            return output, "order_created"
 
         return output, "ok"

@@ -34,6 +34,39 @@ pytest
 ruff check .
 ```
 
+## Payments: local webhook testing and the live test-mode run
+
+By default (`PAYMENT_MODE=simulated`), nothing here talks to Razorpay at all — the simulated
+adapter constructs and delivers its own signed webhook locally, so `pytest` and normal
+development never need a real API key or a public URL.
+
+To exercise the **real** Razorpay test-mode flow (`PAYMENT_MODE=live_test`), Razorpay needs a
+public URL to send webhooks to. Locally, that means a tunnel:
+
+```bash
+cloudflared tunnel --url http://localhost:8000
+```
+
+Paste the printed `https://*.trycloudflare.com` URL (plus `/webhooks/razorpay`) into your
+Razorpay Dashboard's webhook settings (Test mode). **The free `trycloudflare.com` URL changes
+every time you restart the tunnel** — update the Dashboard webhook URL each time you do.
+
+There is no fully headless way to complete a Razorpay payment, even in test mode — Standard
+Checkout, Payment Links, and Server-to-Server integration all require a browser-rendered step
+(the test-mode mock bank page). This is a real product constraint, not a testing gap. To
+produce one real, recorded test-mode session:
+
+1. Start the app (`uvicorn agent_commerce.api.main:app --reload`) and the cloudflared tunnel
+   above, with the tunnel URL registered as the webhook endpoint in the Razorpay Dashboard.
+2. Run `python scripts/live_test_checkout.py --amount 2000`. This creates one real test-mode
+   order and opens a local page that hosts Razorpay's Checkout widget for it.
+3. Complete the payment by hand with a test card (e.g. Visa `4100 2800 0000 1007`, any future
+   expiry, any CVV) — one click, no code involved.
+4. The real webhook arrives at `/webhooks/razorpay`, gets signature-verified, and reconciled.
+
+`scripts/live_test_checkout.py` is intentionally standalone — it is never imported by
+`run_session.py`, the eval loop, or any test, since it requires a human in the loop.
+
 ## Components
 
 - **`core/`** — `Money` (integer paise only), ID generation, canonical JSON, a clock
@@ -121,3 +154,27 @@ ruff check .
     harness — just enough to demonstrate the three strategies are genuinely interchangeable).
   Strategies are pure functions of `(cart, rules)`; session-level rules like "one offer per
   session" are enforced by whatever drives the session, not by the strategy itself.
+- **`payments/`** — order creation, webhook handling, and three-way reconciliation, behind
+  one `PaymentAdapter` interface (`create_order`, `fetch_payments`) that both concrete
+  adapters satisfy identically:
+  - `live_test.py` — the real Razorpay test-mode API (order creation and payment lookup
+    only; it never completes a payment itself — see `scripts/live_test_checkout.py`).
+  - `simulated.py` — constructs a correctly HMAC-signed webhook and feeds it straight to our
+    own handler, so the full lifecycle (order → payment → webhook → reconciliation) executes
+    with no real Razorpay backend involved. This is what `PAYMENT_MODE=simulated` runs, and
+    it's what the deployed Space uses.
+  - `idempotent_adapter.py` / `recording_adapter.py` — decorators (same pattern as
+    `core/llm`'s `CachingLLMClient`/`GuardedLLMClient`) applied uniformly to either adapter:
+    idempotency on `(transaction_id, attempt_no)`, and persisting every created order.
+  - `webhook.py` — verifies `X-Razorpay-Signature` (HMAC-SHA256 over the **raw** body)
+    *before* parsing anything, and is idempotent on `(event, payment_id)`.
+  - `reconciler.py` — a three-way match between our order record, a fresh
+    `adapter.fetch_payments()`, and received webhooks → `matched` / `pending` / `mismatch`.
+    It depends only on the `PaymentAdapter` interface, never on which concrete adapter is
+    active — `build_payment_stack()` (`payments/__init__.py`) is the one place
+    `PAYMENT_MODE` is read.
+  - Runs on webhook receipt (via a callback wired through `WebhookHandler.on_new_webhook`)
+    **and** on a timer (`reconcile_all_pending()`, polled from the FastAPI app's lifespan —
+    see `RECONCILE_POLL_INTERVAL_SECONDS`), so a dropped webhook doesn't strand an order.
+- **`api/main.py`** — `POST /webhooks/razorpay` receives Razorpay's webhooks. `GET /health` as
+  before.
