@@ -333,3 +333,130 @@ whatever's checkpointed in `eval/results.json` at any point, so the report refle
 this partial state, labeled as such throughout (see the report's own "Methodology &
 limitations" section, which leads with exactly what's complete vs. partial vs. not run).
 Decision: stop here rather than wait for quota to free up, to protect time for Phases 9-10.
+
+## 2026-09-05 — read-only ledger connections, and a Windows-only URI bug caught while building it
+
+**What changed:** `LedgerStore.__init__` gained a `read_only: bool = False` parameter. When
+set, it opens a genuine SQLite `mode=ro` connection instead of the normal read-write one, and
+skips the schema/trigger DDL entirely (the file is expected to already be a valid ledger). Used
+for `demo_data/demo_ledger.db` (a committed, curated ledger that the running app never writes
+to) so that Session replay works even when the app's working directory itself is not writable —
+a real constraint on Hugging Face Spaces, not just a defensive nicety. A pure SELECT connection
+never needs to create a rollback-journal file, so this works without relying on filesystem
+permissions being writable at all.
+
+## 2026-09-05 — SessionMetrics gained `upsell_fallback_machine_reason`; one verified backfill
+
+**What changed:** `NoOffer.machine_reason` (added earlier today) now flows all the way into
+`eval/results.json` via a new `SessionMetrics.upsell_fallback_machine_reason` field —
+`compute_session_metrics()` reads it off the session's (at most one) `ActionType.OFFER` ledger
+entry. `None` means the upsell strategy's decision was genuine; any other value names the
+failure mode that produced a fallback instead. This makes the "was this a real decision or a
+fallback" question queryable directly from `results.json`, not something that requires
+cross-referencing console output or another condition's results.
+
+**One verified backfill, not a guess:** the 60 sessions already in `results.json` predate this
+field (it didn't exist when they ran), so `compute_session_metrics()` never populated it for
+them. Rather than leave it silently absent, the 5 sessions confirmed from this run's own
+console output to have hit `"Tool choice is required, but model did not call a tool"` (a Groq
+400, distinct from the schema bug above) were patched directly: `llm__tool_level_only__G01`,
+`llm__argument_level__G11`, `llm__tool_level_only__G17` (both enforcement levels), and
+`llm__tool_level_only__G02` — each cross-checked against `offer_made=False` before patching,
+consistent with a fallback rather than a fabricated value. Every other session's field is
+`null`. Going forward, any re-run of these cells computes this field natively — this backfill
+is a one-time, documented exception for data that predates the field, not a precedent for
+hand-editing `results.json` in general.
+
+## 2026-09-05 — eval.report had hardcoded stale text from the abandoned partial-run era
+
+**What happened:** after the full 60/60 session grid completed, `eval/report.md` still said
+"stopped by genuine Groq TPD quota exhaustion mid-run" and "n = 2 goals fully complete... 1 not
+run at all (G14)" — directly contradicting its own header line two rows above ("10 with all 6
+cells complete, 0 partial") in the same document. `build_report()` had hardcoded the goal count
+(`* 4` for "4-goal grid"), the quota-exhaustion sentence, and the specific goal IDs from Phase
+8's original interrupted run, none of which updated when the grid actually completed.
+
+**Fix:** both spots are now computed from `meta`/`goals_seen`/`goals_complete_all_6` — the
+planned-vs-completed session count, whether the grid is complete, and the sample-size bullet
+all read the real state of `results.json` rather than a snapshot of what was true on a specific
+earlier date. Caught by actually reading the regenerated report end to end after the full
+run, not by assuming a full run trivially "just works" once the data is there.
+
+## 2026-09-05 — upsell_decision schema bug: 12/12 llm-condition sessions were contaminated
+
+**What happened:** `agents/upsell/llm.py`'s `_DECIDE_TOOL` schema listed `sku`/`discount_pct`
+in `"required"` even though their type already permits `null`. Groq's server-side tool-call
+validation requires required keys to be *present* (even as null); a genuine no-offer decision
+naturally omits both entirely, so Groq rejected the call with `missing properties: 'sku',
+'discount_pct'` before any response existed to parse — the same nullable-field bug class as
+`respond_to_offer`'s `counter_price_paise` (see the entry below), just not yet hit live there.
+
+**Scope, discovered by cross-checking against the `rules` condition** (same candidate pool,
+since both strategies call `find_candidate_products()`): of the llm-condition sessions
+checkpointed at the time, **12/12** showed `offer_made=False` while their exact `rules`
+counterpart (same goal, same enforcement level) showed `offer_made=True` in every case. That
+mismatch rate is what made this identifiable as contamination rather than genuine model
+conservatism — a real "the llm condition never offers" finding would be a legitimate result;
+a 12/12 mismatch against a strategy drawing from the identical candidate pool is not.
+
+**Was this visible in the ledger before the fix?** No. The exception was caught inside
+`LLMStrategy.decide()`'s try/except and converted to `NoOffer(reasoning="parse failure: ...")`,
+which flows through `upsell.no_offer` into the exact same `ActionType.OFFER` /
+`output={"offered": False}` ledger entry as a genuine, successfully-parsed decline — identical
+shape, only the free-text `reasoning_summary` differed. A silent fallback and a real decline
+were indistinguishable without this kind of cross-condition detective work. Named as an
+Explainability gap in `WRITEUP.md`.
+
+**Fix:**
+1. Schema: dropped `sku`/`discount_pct` from `_DECIDE_TOOL`'s `"required"` (same for
+   `RESPOND_TOOL`'s `counter_price_paise`, fixed proactively — same bug class, not yet
+   surfaced live, but cheap to close while already in this code). Neither field's own
+   application-level validation depended on being schema-required: `_parse()` and
+   `_decision_from_dict()` already independently enforce "must be present when the decision
+   needs it" via plain `.get()` checks.
+2. Explainability: `NoOffer` gained a `machine_reason: str | None` field — `None` only for a
+   genuine, successfully-parsed decision; a distinct string
+   (`UPSELL_DECISION_CALL_FAILED`/`_MISSING_TOOL_CALL`/`_INCOMPLETE_OFFER`/`_INVALID_SKU`/
+   `NO_CANDIDATE_AVAILABLE`) for every fallback path. Threaded through `upsell.no_offer`'s
+   ledger entry, so `machine_reason` alone now answers "did the model decide this, or did
+   something fail" — no cross-condition comparison required going forward.
+3. Regression tests: `jsonschema.validate()` against both tool schemas confirms a no-offer /
+   non-COUNTER call is now valid, and that `offered`+`reasoning` (resp. `decision`+`reason`)
+   are still enforced — added before re-running anything, so the fix was proven before it was
+   trusted with real quota.
+
+**Re-run:** all 20 `llm`-condition cells deleted from `eval/results.json` and re-run (`none`/
+`rules` cells untouched — they never touch this schema). Confirms the taxonomy's value almost
+immediately: the very first re-run cell (`llm__tool_level_only__G01__seed1`) hit a *different*
+Groq error entirely (`"Tool choice is required, but model did not call a tool"` — the model
+responded without invoking the tool at all) and was correctly caught and labeled
+`UPSELL_DECISION_MISSING_TOOL_CALL` — the fallback named itself as a fallback instead of
+masquerading as a decision, which is exactly the gap this fix closed.
+
+## 2026-09-05 — eval runner: a real mid-run 429 crashed the process instead of aborting cleanly
+
+**What happened:** the llm-condition re-run above hit Groq's real daily token quota
+(`Used 199611, Requested 1195` against a 200,000 limit) on its 4th cell. `GuardedLLMClient`
+correctly retries a `RetryableError` with backoff, but after retries are exhausted it re-raises
+the exception, which propagated all the way out of `main_async`'s loop and killed the process
+with an unhandled traceback (exit code 1) — even though 3 cells had already completed and were
+safely checkpointed. Functionally harmless (nothing lost, `--tier A` still resumed cleanly), but
+looked like a crash rather than the same kind of clean, expected stop the runner's own
+`--max-tokens-budget` self-check already produces.
+
+**Fix:** `main_async`'s per-cell loop now catches `RetryableError`, `CallBudgetExceededError`,
+and `FatalError` around `run_cell()` and aborts with the identical "results saved, rerun to
+resume" message the token-budget check uses — an interruption from a real provider-side limit
+should never read differently than a self-imposed one.
+
+**Bug caught while verifying this, not left for the deployed Space to find:** the first
+implementation built the SQLite URI as `f"file:{path}?mode=ro"` — a plain f-string over the
+`Path` object. On Windows this is broken: `str(path)` yields backslashes and a bare drive letter
+(`C:\Users\...`), neither of which is valid inside a `file:` URI, so every read-only open failed
+with `sqlite3.OperationalError: unable to open database file`, even against a perfectly normal,
+readable file. Fixed by building the URI via `path.resolve().as_uri()` (which correctly produces
+`file:///C:/Users/...`) instead of interpolating the raw path. Caught by actually testing against
+a real read-only file and directory (`chmod`-restricted, not just `mode=ro` on an otherwise
+writable path) rather than trusting that opening in `mode=ro` was sufficient on its own —
+the first version passed against a writable file/directory in `mode=ro` and only failed once
+tested against a genuinely read-only one, which is the condition that matters for the Space.

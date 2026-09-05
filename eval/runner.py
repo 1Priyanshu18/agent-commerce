@@ -30,6 +30,7 @@ from agent_commerce.catalog.service import CatalogService
 from agent_commerce.catalog.store import CatalogStore
 from agent_commerce.core.config import load_config
 from agent_commerce.core.llm import build_client
+from agent_commerce.core.llm.resilience import CallBudgetExceededError, FatalError, RetryableError
 from agent_commerce.demo.usage_tracker import UsageTrackingLLMClient
 from agent_commerce.ledger.store import LedgerStore
 from agent_commerce.mcp.buyer_server import build_buyer_server
@@ -238,16 +239,28 @@ async def main_async(args: SimpleNamespace) -> None:
 
         start_idx = len(tracker.calls)
         print(f"[{done + 1}/{total_cells}] running {cell_id}...", flush=True)
-        metrics = await run_cell(
-            condition=condition,
-            enforcement_level=enforcement_level,
-            goal=goal,
-            seed=seed,
-            tracker=tracker,
-            provider=provider,
-            model=model,
-            data_dir=data_dir,
-        )
+        try:
+            metrics = await run_cell(
+                condition=condition,
+                enforcement_level=enforcement_level,
+                goal=goal,
+                seed=seed,
+                tracker=tracker,
+                provider=provider,
+                model=model,
+                data_dir=data_dir,
+            )
+        except (RetryableError, CallBudgetExceededError, FatalError) as e:
+            # A real, persistent provider-side failure (e.g. a 429 that survives every
+            # retry) must abort exactly as cleanly as the self-imposed token-budget check
+            # above — every completed cell up to this point is already checkpointed, so an
+            # interruption here should never look like a crash, just an early, resumable stop.
+            print(
+                f"\nABORTING: {cell_id} failed with a real LLM-provider error "
+                f"({type(e).__name__}: {e}). Results so far are saved at {RESULTS_PATH} "
+                f"({done}/{total_cells} sessions completed) — rerun the same command to resume."
+            )
+            return
         cell_calls = tracker.calls[start_idx:]
         real_calls = sum(1 for c in cell_calls if not c["cached"])
         cache_hits = len(cell_calls) - real_calls

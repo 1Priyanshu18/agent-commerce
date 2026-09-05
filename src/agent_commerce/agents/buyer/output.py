@@ -46,7 +46,13 @@ RESPOND_TOOL = ToolSpec(
             },
             "reason": {"type": "string"},
         },
-        "required": ["decision", "counter_price_paise", "reason"],
+        # counter_price_paise deliberately NOT required — same nullable-field bug class as
+        # upsell_decision's sku/discount_pct (see agents/upsell/llm.py): Groq's server-side
+        # validation rejects a call that omits a required key entirely rather than sending it
+        # as null, and a genuine ACCEPT/DECLINE naturally omits this key. _decision_from_dict()
+        # already treats a missing key the same as an explicit null via .get(), so this was
+        # never load-bearing for the COUNTER-requires-a-price invariant.
+        "required": ["decision", "reason"],
         "additionalProperties": False,
     },
 )

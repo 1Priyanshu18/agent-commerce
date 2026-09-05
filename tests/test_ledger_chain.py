@@ -121,6 +121,31 @@ def test_reasoning_and_reason_fields_round_trip(ledger: LedgerStore) -> None:
     assert ledger.verify_chain().ok is True
 
 
+def test_read_only_ledger_can_query_but_not_append(tmp_path) -> None:
+    path = tmp_path / "ledger.db"
+    writer = LedgerStore(path)
+    writer.append(
+        transaction_id="txn_1", caused_by=[], actor=Actor.ORCHESTRATOR,
+        action_type=ActionType.SEARCH, input={}, output={},
+    )
+    writer.close()
+
+    reader = LedgerStore(path, read_only=True)
+    assert reader.list_transaction_ids() == ["txn_1"]
+    assert len(reader.entries_for_transaction("txn_1")) == 1
+    assert reader.verify_chain().ok is True
+    with pytest.raises(sqlite3.OperationalError):
+        reader.append(
+            transaction_id="txn_1", caused_by=[], actor=Actor.ORCHESTRATOR,
+            action_type=ActionType.SEARCH, input={}, output={},
+        )
+
+
+def test_read_only_rejects_in_memory_path() -> None:
+    with pytest.raises(ValueError):
+        LedgerStore(":memory:", read_only=True)
+
+
 def test_list_transaction_ids_returns_distinct_ids_in_first_seen_order(ledger: LedgerStore) -> None:
     ledger.append(
         transaction_id="txn_b", caused_by=[], actor=Actor.ORCHESTRATOR,

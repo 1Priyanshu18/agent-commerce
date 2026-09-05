@@ -101,14 +101,32 @@ class LedgerStore:
     anywhere in the ledger breaks verify_chain() for the whole store, not just one transaction.
     """
 
-    def __init__(self, db_path: str | Path, clock: Clock | None = None) -> None:
+    def __init__(
+        self, db_path: str | Path, clock: Clock | None = None, *, read_only: bool = False
+    ) -> None:
         path = Path(db_path)
-        if str(path) != ":memory:":
-            path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(path), check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_SCHEMA)
-        self._conn.commit()
+        if read_only:
+            # Opens via a URI in mode=ro rather than relying on filesystem permissions: a pure
+            # SELECT connection never needs to create a rollback-journal file, so this works
+            # even when the containing directory itself is not writable (e.g. an HF Space's
+            # read-only app directory — see docs/PHASE_10_SPEC.md). Never runs the schema
+            # DDL/triggers here — the file is expected to already be a valid ledger (built by
+            # scripts/build_demo_ledger.py), and DDL against a read-only connection would fail
+            # anyway.
+            if str(path) == ":memory:":
+                raise ValueError("read_only=True is not valid with an in-memory ledger")
+            # as_uri() (not an f-string on the raw path) so this works on Windows too — a bare
+            # "file:{path}" is invalid once the path contains backslashes or a drive letter.
+            uri = path.resolve().as_uri() + "?mode=ro"
+            self._conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
+        else:
+            if str(path) != ":memory:":
+                path.parent.mkdir(parents=True, exist_ok=True)
+            self._conn = sqlite3.connect(str(path), check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.executescript(_SCHEMA)
+            self._conn.commit()
         self._clock = clock or SystemClock()
         self._lock = threading.Lock()
 

@@ -140,7 +140,9 @@ its own audit-trail key would undermine the audit trail itself.
 
 @st.cache_resource
 def get_demo_ledger() -> LedgerStore:
-    return LedgerStore(DEMO_LEDGER_PATH)
+    # read_only=True: this file is committed, curated, and never written to by the running
+    # app — opening it read-only means it works even on a read-only app directory (HF Spaces).
+    return LedgerStore(DEMO_LEDGER_PATH, read_only=True)
 
 
 @st.cache_resource

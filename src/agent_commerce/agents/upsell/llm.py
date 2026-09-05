@@ -42,7 +42,13 @@ _DECIDE_TOOL = ToolSpec(
                 "description": "Justification for this decision — mandatory whether offering or not.",
             },
         },
-        "required": ["offered", "sku", "discount_pct", "reasoning"],
+        # sku/discount_pct are deliberately NOT required here even though they're only
+        # meaningful when offered=true (enforced independently in _parse() below). Groq's
+        # server-side tool-call validation rejects a call that omits a required key entirely
+        # rather than sending it as null — and a genuine no-offer decision naturally omits
+        # both, so listing them as required made every clean decline fail before a response
+        # even existed to parse (see docs/PROGRESS.md, "same nullable-field class of bug").
+        "required": ["offered", "reasoning"],
         "additionalProperties": False,
     },
 )
@@ -100,7 +106,10 @@ class LLMStrategy:
     def decide(self, cart: Cart, rules: MerchantRules) -> Offer | NoOffer:
         candidates = find_candidate_products(cart, self._catalog, rules)
         if not cart.items or not candidates:
-            return NoOffer(reasoning="no complementary in-stock candidate available for this cart")
+            return NoOffer(
+                reasoning="no complementary in-stock candidate available for this cart",
+                machine_reason="NO_CANDIDATE_AVAILABLE",
+            )
 
         system = _SYSTEM_PROMPT_TEMPLATE.format(
             max_discount_pct=rules.max_discount_pct, min_margin_pct=rules.min_margin_pct
@@ -119,7 +128,10 @@ class LLMStrategy:
             # that omits a nullable field entirely instead of sending it as null) is the same
             # kind of failure as a response that parses to nonsense, just caught earlier.
             logger.warning("upsell LLM strategy call failed: %s", e)
-            return NoOffer(reasoning=f"parse failure: upsell decision call failed ({e})")
+            return NoOffer(
+                reasoning=f"parse failure: upsell decision call failed ({e})",
+                machine_reason="UPSELL_DECISION_CALL_FAILED",
+            )
 
         decision = self._parse(response, candidates, rules)
         check = check_dark_patterns(decision.reasoning)
@@ -138,23 +150,34 @@ class LLMStrategy:
     ) -> Offer | NoOffer:
         tool_call = response.tool_call_by_name("upsell_decision")
         if tool_call is None:
-            return NoOffer(reasoning="parse failure: model did not return a decision tool call")
+            return NoOffer(
+                reasoning="parse failure: model did not return a decision tool call",
+                machine_reason="UPSELL_DECISION_MISSING_TOOL_CALL",
+            )
 
         data = tool_call.arguments or {}
         offered = data.get("offered")
         reasoning = data.get("reasoning") or ""
 
         if offered is not True:
+            # machine_reason stays None: this is a genuine, successfully-parsed model
+            # decision not to offer, not a fallback from any failure.
             return NoOffer(reasoning=reasoning or "model declined to make an offer")
 
         sku = data.get("sku")
         discount_pct = data.get("discount_pct")
         if not sku or discount_pct is None:
-            return NoOffer(reasoning="parse failure: offered=true but sku or discount_pct missing")
+            return NoOffer(
+                reasoning="parse failure: offered=true but sku or discount_pct missing",
+                machine_reason="UPSELL_DECISION_INCOMPLETE_OFFER",
+            )
 
         candidate_skus = {p.sku for p in candidates}
         if sku not in candidate_skus:
-            return NoOffer(reasoning=f"parse failure: model proposed {sku!r}, not in the candidate list")
+            return NoOffer(
+                reasoning=f"parse failure: model proposed {sku!r}, not in the candidate list",
+                machine_reason="UPSELL_DECISION_INVALID_SKU",
+            )
 
         clamped_discount_pct = min(float(discount_pct), rules.max_discount_pct)
         return Offer(sku=sku, discount_pct=round(clamped_discount_pct, 2), reasoning=reasoning)

@@ -1,6 +1,9 @@
 import logging
 
-from agent_commerce.agents.upsell.llm import LLMStrategy
+import jsonschema
+import pytest
+
+from agent_commerce.agents.upsell.llm import _DECIDE_TOOL, LLMStrategy
 from agent_commerce.agents.upsell.strategy import MerchantRules, NoOffer, Offer
 from agent_commerce.cart.models import Cart, CartItem
 from agent_commerce.core.llm import FakeLLMClient, text_response, tool_response
@@ -210,6 +213,70 @@ def test_dark_pattern_reasoning_is_logged(make_catalog, caplog) -> None:
 
     assert isinstance(decision, Offer)  # the check flags, but does not block the decision
     assert any("dark pattern" in record.message for record in caplog.records)
+
+
+def test_decide_tool_schema_accepts_no_offer_without_sku_or_discount() -> None:
+    # Regression test for the bug where Groq's server-side validation rejected a genuine
+    # no-offer decision because sku/discount_pct were listed as required even though a
+    # decline naturally omits both entirely (rather than sending them as null).
+    jsonschema.validate(
+        instance={"offered": False, "reasoning": "No candidate meets the margin floor."},
+        schema=_DECIDE_TOOL.input_schema,
+    )
+
+
+def test_decide_tool_schema_accepts_offer_with_sku_and_discount() -> None:
+    jsonschema.validate(
+        instance={
+            "offered": True,
+            "sku": "SKU-A002",
+            "discount_pct": 10,
+            "reasoning": "High margin complement.",
+        },
+        schema=_DECIDE_TOOL.input_schema,
+    )
+
+
+def test_decide_tool_schema_still_requires_offered_and_reasoning() -> None:
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(instance={"reasoning": "x"}, schema=_DECIDE_TOOL.input_schema)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(instance={"offered": False}, schema=_DECIDE_TOOL.input_schema)
+
+
+def test_llm_call_raising_records_a_distinct_machine_reason(make_catalog) -> None:
+    class _RaisingLLM(FakeLLMClient):
+        def complete(self, **kwargs):
+            raise RuntimeError("simulated server-side tool-call validation failure")
+
+    catalog = make_catalog(_PRODUCTS)
+    strategy = LLMStrategy(_RaisingLLM([]), catalog)
+
+    decision = strategy.decide(_cart_with_a001(), _rules())
+
+    assert isinstance(decision, NoOffer)
+    assert decision.machine_reason == "UPSELL_DECISION_CALL_FAILED"
+
+
+def test_genuine_no_offer_decision_has_no_machine_reason(make_catalog) -> None:
+    # machine_reason is None only for a genuine, successfully-parsed model decision — this
+    # is what lets the ledger distinguish "model declined" from "call failed and we fell
+    # back to decline" (see docs/PROGRESS.md).
+    catalog = make_catalog(_PRODUCTS)
+    llm = FakeLLMClient(
+        [
+            tool_response(
+                "upsell_decision",
+                {"offered": False, "reasoning": "No item meets the margin floor."},
+            )
+        ]
+    )
+    strategy = LLMStrategy(llm, catalog)
+
+    decision = strategy.decide(_cart_with_a001(), _rules())
+
+    assert isinstance(decision, NoOffer)
+    assert decision.machine_reason is None
 
 
 def test_clean_reasoning_is_not_logged(make_catalog, caplog) -> None:

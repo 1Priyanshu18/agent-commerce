@@ -67,11 +67,15 @@ def build_merchant_server(
         return {"entry_id": entry.entry_id, "offered": True, "sku": sku, "discount_pct": discount_pct}
 
     @mcp.tool(name="upsell.no_offer")
-    def upsell_no_offer(transaction_id: str, reasoning: str) -> dict:
+    def upsell_no_offer(transaction_id: str, reasoning: str, machine_reason: str | None = None) -> dict:
         _authz("upsell.no_offer", transaction_id)
         if not reasoning.strip():
             raise ValueError("reasoning is required even when declining to make an offer")
 
+        # machine_reason is None for a genuine model decision to decline, and a distinct
+        # string (e.g. "UPSELL_DECISION_CALL_FAILED") when this NoOffer is itself a fallback
+        # from some failure — see agents/upsell/strategy.py's NoOffer.machine_reason. Without
+        # this, a silent fallback and a real decline write an identical ledger entry.
         entry = ledger.append(
             transaction_id=transaction_id,
             caused_by=_caused_by(transaction_id),
@@ -80,6 +84,7 @@ def build_merchant_server(
             input={},
             output={"offered": False},
             reasoning_summary=reasoning,
+            machine_reason=machine_reason,
         )
         return {"entry_id": entry.entry_id, "offered": False}
 

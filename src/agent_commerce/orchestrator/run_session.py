@@ -288,7 +288,12 @@ class BuyerSessionRunner:
 
         if isinstance(decision, NoOffer):
             await self._merchant_mcp.call_tool(
-                "upsell.no_offer", {"transaction_id": transaction_id, "reasoning": decision.reasoning}
+                "upsell.no_offer",
+                {
+                    "transaction_id": transaction_id,
+                    "reasoning": decision.reasoning,
+                    "machine_reason": decision.machine_reason,
+                },
             )
             return
 

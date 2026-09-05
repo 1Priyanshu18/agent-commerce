@@ -1,4 +1,8 @@
+import jsonschema
+import pytest
+
 from agent_commerce.agents.buyer.output import (
+    RESPOND_TOOL,
     DecisionType,
     parse_buyer_decision,
     parse_marker_decision,
@@ -16,6 +20,38 @@ def _response(*, text: str = "", tool_calls: list[ToolCall] | None = None) -> LL
         provider="fake",
         model="fake",
     )
+
+
+# --- schema regression: a non-COUNTER response must be a valid tool call ---
+
+
+def test_respond_tool_schema_accepts_accept_without_counter_price() -> None:
+    # Regression test for the same nullable-field bug class as upsell_decision: Groq's
+    # server-side validation rejects a call that omits a required key entirely, and a
+    # genuine ACCEPT/DECLINE naturally omits counter_price_paise.
+    jsonschema.validate(
+        instance={"decision": "ACCEPT", "reason": "good deal"}, schema=RESPOND_TOOL.input_schema
+    )
+
+
+def test_respond_tool_schema_accepts_decline_without_counter_price() -> None:
+    jsonschema.validate(
+        instance={"decision": "DECLINE", "reason": "not interested"}, schema=RESPOND_TOOL.input_schema
+    )
+
+
+def test_respond_tool_schema_accepts_counter_with_price() -> None:
+    jsonschema.validate(
+        instance={"decision": "COUNTER", "counter_price_paise": 45000, "reason": "too much"},
+        schema=RESPOND_TOOL.input_schema,
+    )
+
+
+def test_respond_tool_schema_still_requires_decision_and_reason() -> None:
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(instance={"reason": "x"}, schema=RESPOND_TOOL.input_schema)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(instance={"decision": "ACCEPT"}, schema=RESPOND_TOOL.input_schema)
 
 
 # --- tool-call parsing ---

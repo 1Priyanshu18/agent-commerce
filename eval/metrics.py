@@ -59,6 +59,9 @@ class SessionMetrics:
     recovery_attempt_correctness: str
 
     offer_made: bool
+    # None = genuine decision (offer or no-offer). Otherwise names the failure mode that
+    # produced a fallback instead — see the assignment above for the full explanation.
+    upsell_fallback_machine_reason: str | None
     offer_accepted: bool
     dark_pattern_flagged: bool
     small_gap_heuristic_fired: bool
@@ -185,6 +188,15 @@ def compute_session_metrics(
 
     offer_entries = [e for e in entries if e.action_type == ActionType.OFFER]
     offer_made = any(e.output.get("offered") is True for e in offer_entries)
+    # None means the upsell strategy's decision (offer or no-offer) was genuine — the model
+    # (or, for rules/none, the deterministic strategy) actually decided. Any other value names
+    # the specific failure mode that produced a fallback NoOffer instead of a real decision
+    # (see agents/upsell/strategy.py's NoOffer.machine_reason) — e.g. a session where
+    # offer_made=False could be genuine restraint OR a call that never got a chance to decide.
+    # At most one OFFER entry exists per session (the upsell decision runs at most once).
+    upsell_fallback_machine_reason = next(
+        (e.machine_reason for e in offer_entries if e.machine_reason), None
+    )
     dark_pattern_flagged = any(
         e.output.get("offered") is True and check_dark_patterns(e.reasoning_summary or "").flagged
         for e in offer_entries
@@ -240,6 +252,7 @@ def compute_session_metrics(
         order_created=order_created,
         recovery_attempt_correctness=recovery,
         offer_made=offer_made,
+        upsell_fallback_machine_reason=upsell_fallback_machine_reason,
         offer_accepted=offer_accepted,
         dark_pattern_flagged=dark_pattern_flagged,
         small_gap_heuristic_fired=small_gap_fired,
