@@ -30,6 +30,7 @@ from agent_commerce.catalog.service import CatalogService
 from agent_commerce.catalog.store import CatalogStore
 from agent_commerce.core.config import load_config
 from agent_commerce.core.llm import build_client
+from agent_commerce.demo.usage_tracker import UsageTrackingLLMClient
 from agent_commerce.ledger.store import LedgerStore
 from agent_commerce.mcp.buyer_server import build_buyer_server
 from agent_commerce.mcp.merchant_server import build_merchant_server
@@ -56,31 +57,6 @@ MEASURED_AVG_TOKENS_PER_CALL = 2558
 MEASURED_AVG_CALLS_PER_SESSION = 15
 
 TIER_DEFAULTS = {"A": (10, 1), "B": (20, 1), "C": (20, 3)}
-
-
-class _UsageTrackingLLMClient:
-    """Wraps any LLMClient to record per-call usage so the runner can attribute tokens to the
-    specific cell that produced them. Sits outermost (around the caching/rate-limiting stack)
-    so it sees cache hits too — the runner excludes those from token/cost accounting itself
-    (a cache hit costs no real quota, but is still a real decision point in the session).
-    """
-
-    def __init__(self, wrapped) -> None:
-        self._wrapped = wrapped
-        self.calls: list[dict] = []
-
-    @property
-    def provider(self) -> str:
-        return self._wrapped.provider
-
-    @property
-    def model(self) -> str:
-        return self._wrapped.model
-
-    def complete(self, **kwargs):
-        response = self._wrapped.complete(**kwargs)
-        self.calls.append({"usage": response.usage, "cached": response.cached})
-        return response
 
 
 def _cell_id(condition: str, enforcement_level: str, goal_id: str, seed: int) -> str:
@@ -140,7 +116,7 @@ async def run_cell(
     enforcement_level: str,
     goal: Goal,
     seed: int,
-    tracker: _UsageTrackingLLMClient,
+    tracker: UsageTrackingLLMClient,
     provider: str,
     model: str,
     data_dir: Path,
@@ -237,7 +213,7 @@ async def main_async(args: SimpleNamespace) -> None:
 
     config = load_config()
     raw_client = build_client(config)  # cache + rate-limit + retry, shared for the whole run
-    tracker = _UsageTrackingLLMClient(raw_client)
+    tracker = UsageTrackingLLMClient(raw_client)
     provider = config.llm_provider
     model = _model_for(config)
 

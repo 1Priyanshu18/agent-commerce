@@ -28,6 +28,9 @@ class Config:
     reconcile_poll_interval_seconds: int
     pending_reconciliation_threshold_seconds: int
     data_dir: str
+    demo_passphrase: str
+    demo_max_calls_per_session: int
+    demo_daily_call_budget: int
 
 
 @lru_cache
@@ -52,4 +55,7 @@ def load_config() -> Config:
             os.environ.get("PENDING_RECONCILIATION_THRESHOLD_SECONDS", "30")
         ),
         data_dir=os.environ.get("DATA_DIR", "data"),
+        demo_passphrase=os.environ.get("DEMO_PASSPHRASE", ""),
+        demo_max_calls_per_session=int(os.environ.get("DEMO_MAX_CALLS_PER_SESSION", "20")),
+        demo_daily_call_budget=int(os.environ.get("DEMO_DAILY_CALL_BUDGET", "50")),
     )

@@ -43,6 +43,9 @@ def _payment_adapter(mcp_stack: SimpleNamespace, tmp_path: Path) -> PaymentAdapt
         razorpay_webhook_secret="test_webhook_secret",
         reconcile_poll_interval_seconds=30,
         pending_reconciliation_threshold_seconds=30,
+        demo_passphrase="",
+        demo_max_calls_per_session=20,
+        demo_daily_call_budget=50,
         data_dir=str(tmp_path),
     )
     stack = build_payment_stack(config, ledger=mcp_stack.ledger, data_dir=tmp_path)

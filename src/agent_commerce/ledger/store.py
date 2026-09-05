@@ -236,6 +236,16 @@ class LedgerStore:
         rows = self._conn.execute("SELECT * FROM ledger_entries ORDER BY seq ASC").fetchall()
         return [self._row_to_entry(row) for row in rows]
 
+    def list_transaction_ids(self) -> list[str]:
+        """Every distinct transaction_id in the store, in first-seen order — the basis for a
+        session picker (Phase 9's Session replay tab) without the caller needing raw SQL.
+        """
+        rows = self._conn.execute(
+            "SELECT transaction_id, MIN(seq) AS first_seq FROM ledger_entries "
+            "GROUP BY transaction_id ORDER BY first_seq ASC"
+        ).fetchall()
+        return [row["transaction_id"] for row in rows]
+
     def verify_chain(self) -> ChainVerification:
         rows = self._conn.execute("SELECT * FROM ledger_entries ORDER BY seq ASC").fetchall()
         expected_prev = GENESIS_HASH

@@ -119,3 +119,19 @@ def test_reasoning_and_reason_fields_round_trip(ledger: LedgerStore) -> None:
     assert fetched.machine_reason == "BUDGET_CEILING_EXCEEDED"
     assert fetched.human_reason.startswith("cart total")
     assert ledger.verify_chain().ok is True
+
+
+def test_list_transaction_ids_returns_distinct_ids_in_first_seen_order(ledger: LedgerStore) -> None:
+    ledger.append(
+        transaction_id="txn_b", caused_by=[], actor=Actor.ORCHESTRATOR,
+        action_type=ActionType.SEARCH, input={}, output={},
+    )
+    ledger.append(
+        transaction_id="txn_a", caused_by=[], actor=Actor.ORCHESTRATOR,
+        action_type=ActionType.SEARCH, input={}, output={},
+    )
+    ledger.append(
+        transaction_id="txn_b", caused_by=[], actor=Actor.ORCHESTRATOR,
+        action_type=ActionType.SELECT, input={}, output={},
+    )
+    assert ledger.list_transaction_ids() == ["txn_b", "txn_a"]
