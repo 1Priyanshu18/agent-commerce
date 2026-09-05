@@ -14,7 +14,7 @@ gated by a deterministic policy engine and recorded to a hash-chained audit ledg
 
 ## Live demo
 
-**[Agent Commerce on Hugging Face Spaces](<SPACE_URL>)**
+**[Agent Commerce on Hugging Face Spaces](<https://agent-commerce-ejfu72ckiwotxofekjj3at.streamlit.app/>)**
 
 The Space ships a curated, pre-recorded ledger for the Session replay tab and runs payments in
 `PAYMENT_MODE=simulated` — see [Deploying to Hugging Face Spaces](#deploying-to-hugging-face-spaces)

@@ -51,9 +51,15 @@ REPORT_PATH = REPO_ROOT / "eval" / "report.md"
 MARGIN_PLOT_PATH = REPO_ROOT / "eval" / "plot_margin_uplift.png"
 SCATTER_PLOT_PATH = REPO_ROOT / "eval" / "plot_false_block_vs_prevention.png"
 
+# Streamlit's `:color[text]` markdown directive only recognizes a fixed palette (red, orange,
+# yellow, green, blue, violet, gray/grey, rainbow, primary) — "teal" isn't one of them, and an
+# unrecognized color name breaks the directive's parsing (the bracketed content vanishes rather
+# than falling back to plain text). "violet" is the closest valid palette color to the
+# originally-intended teal, and is used here instead of a color already claimed by
+# VERDICT_COLOR below (blue=TRANSFORM) to avoid the two chips ever looking identical.
 ACTOR_COLOR = {
-    Actor.BUYER_AGENT: "teal",
-    Actor.UPSELL_AGENT: "teal",
+    Actor.BUYER_AGENT: "violet",
+    Actor.UPSELL_AGENT: "violet",
     Actor.POLICY_ENGINE: "orange",
     Actor.PAYMENT_LAYER: "grey",
     Actor.ORCHESTRATOR: "grey",

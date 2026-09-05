@@ -52,12 +52,29 @@ below for how this shows up as an open question in the evaluation results, not a
 
 **Argument-level enforcement, not just tool-level.** The policy engine evaluates real values —
 cart totals, discount percentages, SKUs — at the moment a tool is about to execute, not merely
-which tool name was called. This system explicitly measures the alternative to show why it
-matters: a `tool_level_only` mode exists in the same engine, gating purely on tool identity and
-ignoring arguments, so the evaluation grid can compare the two enforcement levels head to head
-rather than asserting the difference. Where tool-level gating cannot distinguish a ₹500
-checkout from a ₹50,000 one — both are just "a call to `checkout.confirm`" — argument-level
-enforcement catches the second and lets the first through.
+which tool name was called. The same engine also supports a `tool_level_only` mode, gating
+purely on tool identity and ignoring arguments, specifically so the two enforcement levels can
+be compared instead of the difference being merely asserted. Where tool-level gating cannot
+distinguish a ₹500 checkout from a ₹50,000 one — both are just "a call to `checkout.confirm`"
+— argument-level enforcement is designed to catch the second and let the first through.
+
+**The evaluation grid did not end up exercising this comparison, and we say so plainly rather
+than let the numbers imply otherwise.** Every goal run in the eval grid has a compliant
+purchase available, and the buyer agent stayed under its own budget ceiling in every session —
+no goal ever attempted a real over-budget checkout, so the grid's violation-prevention figures
+read 0/0 in both enforcement levels (see `eval/report.md`'s Limitations section). That is not
+evidence the two levels are equally safe; it means the grid supplies no empirical evidence,
+in either direction, for whether argument-level enforcement actually prevents more violations
+than tool-level enforcement. The comparison mechanism is built and working — it simply wasn't
+tested against a real violation in this evaluation window.
+
+The real evidence for the gate's reliability under pressure comes from a different source: the
+Phase 7 live-attempt record (see "The policy-deny-recovery record" in Findings, below). Across
+roughly six to seven live attempts at a genuine over-budget recovery scenario, the policy
+engine — running in its normal, argument-level mode — denied the over-budget checkout correctly
+in 100% of attempts, including several where the buyer agent's own recovery planning failed
+outright. That is what this system's claim about the gate holding under pressure actually rests
+on, not the grid's enforcement-level comparison.
 
 **Role separation across two MCP servers.** The buyer agent and the merchant-side upsell agent
 are each backed by their own FastMCP server, and neither server registers `policy.*` or
