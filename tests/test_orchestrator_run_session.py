@@ -4,6 +4,8 @@ from types import SimpleNamespace
 import pytest
 
 from agent_commerce.agents.buyer.agent import BuyerAgent
+from agent_commerce.agents.upsell.rules import RulesStrategy
+from agent_commerce.agents.upsell.strategy import MerchantRules
 from agent_commerce.core.config import Config
 from agent_commerce.core.llm import FakeLLMClient, text_response, tool_response
 from agent_commerce.ledger.models import ActionType
@@ -238,3 +240,153 @@ async def test_no_tool_calls_ends_session_as_no_purchase(mcp_stack: SimpleNamesp
 
     assert result.outcome == "no_purchase"
     assert result.turns_used == 1
+
+
+async def test_upsell_offer_accepted_adds_a_second_item_at_a_discount(
+    mcp_stack: SimpleNamespace, tmp_path: Path
+) -> None:
+    txn = "txn_upsell_accept"
+    # A generous ceiling — RulesStrategy's chosen complement (SKU-0009, ~Rs 2,499 before its
+    # discount) plus SKU-0001 (~Rs 899) must both fit, or checkout.confirm denies for exceeding
+    # budget and the session needs recovery turns this test doesn't script.
+    generous_constraints = tool_response(
+        "extract_buyer_constraints",
+        {
+            "budget_ceiling_paise": 500000,
+            "soft_target_paise": None,
+            "category": "Toys & Games",
+            "recipient_context": "10-year-old nephew",
+            "must_have": [],
+            "deadline": None,
+        },
+    )
+    responses = [
+        generous_constraints,
+        tool_response("catalog.search", {"transaction_id": txn, "category": "Toys & Games"}),
+        tool_response("cart.add", {"transaction_id": txn, "sku": "SKU-0001", "quantity": 1}),
+        # decide_on_offer's forced tool call, consumed synchronously inside cart.add's
+        # handling, before the loop's next turn:
+        tool_response(
+            "respond_to_offer", {"decision": "ACCEPT", "counter_price_paise": None, "reason": "sure"}
+        ),
+        tool_response("checkout.confirm", {"transaction_id": txn}),
+    ]
+    llm = FakeLLMClient(responses)
+    agent = BuyerAgent(llm)
+    engine = PolicyEngine(compile_policy(REPO_POLICY_PATH))
+    policy = PolicyService(engine, mcp_stack.ledger)
+    payment = _payment_adapter(mcp_stack, tmp_path)
+    rules = MerchantRules(max_discount_pct=15, min_margin_pct=12, blacklist_skus=frozenset({"SKU-0042"}))
+    runner = BuyerSessionRunner(
+        agent=agent,
+        buyer_mcp=mcp_stack.buyer_mcp,
+        sessions=mcp_stack.sessions,
+        catalog=mcp_stack.catalog,
+        ledger=mcp_stack.ledger,
+        policy=policy,
+        payment=payment,
+        upsell_strategy=RulesStrategy(mcp_stack.catalog),
+        merchant_rules=rules,
+        merchant_mcp=mcp_stack.merchant_mcp,
+    )
+
+    result = await runner.run(txn, "Buy a birthday gift under Rs 2000 for my 10-year-old nephew")
+
+    assert result.outcome == "order_created"
+    assert len(result.cart_view["items"]) == 2
+
+    entries = mcp_stack.ledger.entries_for_transaction(txn)
+    offer_entries = [e for e in entries if e.action_type == ActionType.OFFER]
+    assert len(offer_entries) == 1
+    assert offer_entries[0].output["offered"] is True
+
+    upsell_selects = [
+        e
+        for e in entries
+        if e.action_type == ActionType.SELECT and e.input.get("source") == "upsell_accepted"
+    ]
+    assert len(upsell_selects) == 1
+    assert mcp_stack.ledger.verify_chain().ok is True
+
+
+async def test_upsell_none_strategy_makes_no_offer(mcp_stack: SimpleNamespace, tmp_path: Path) -> None:
+    txn = "txn_upsell_none"
+    responses = [
+        _CONSTRAINTS_RESPONSE,
+        tool_response("catalog.search", {"transaction_id": txn, "category": "Toys & Games"}),
+        tool_response("cart.add", {"transaction_id": txn, "sku": "SKU-0001", "quantity": 1}),
+        tool_response("checkout.confirm", {"transaction_id": txn}),
+    ]
+    runner = _runner(mcp_stack, tmp_path, responses)
+
+    result = await runner.run(txn, "Buy a birthday gift under Rs 2000 for my 10-year-old nephew")
+
+    assert result.outcome == "order_created"
+    assert len(result.cart_view["items"]) == 1
+
+    entries = mcp_stack.ledger.entries_for_transaction(txn)
+    assert not any(e.action_type == ActionType.OFFER for e in entries)
+
+
+async def test_upsell_decide_on_offer_raising_fails_closed_instead_of_crashing_session(
+    mcp_stack: SimpleNamespace, tmp_path: Path
+) -> None:
+    # Observed live: Groq's server-side tool-call validation can reject a response that omits
+    # a nullable field entirely (rather than sending it as null), raising before any response
+    # object exists to parse. A malformed side-decision like this must never crash the whole
+    # buying session — it must fail closed exactly like an unparseable response would.
+    class _RaisingOnSecondCallLLM(FakeLLMClient):
+        def complete(self, **kwargs):
+            if len(self.calls) == 3:  # the decide_on_offer call, after constraints/search/add
+                self.calls.append(kwargs)
+                raise RuntimeError("simulated server-side tool-call validation failure")
+            return super().complete(**kwargs)
+
+    txn = "txn_upsell_decide_raises"
+    generous_constraints = tool_response(
+        "extract_buyer_constraints",
+        {
+            "budget_ceiling_paise": 500000,
+            "soft_target_paise": None,
+            "category": "Toys & Games",
+            "recipient_context": "10-year-old nephew",
+            "must_have": [],
+            "deadline": None,
+        },
+    )
+    responses = [
+        generous_constraints,
+        tool_response("catalog.search", {"transaction_id": txn, "category": "Toys & Games"}),
+        tool_response("cart.add", {"transaction_id": txn, "sku": "SKU-0001", "quantity": 1}),
+        # the raising call is intercepted before this is ever popped
+        tool_response("checkout.confirm", {"transaction_id": txn}),
+    ]
+    llm = _RaisingOnSecondCallLLM(responses)
+    agent = BuyerAgent(llm)
+    engine = PolicyEngine(compile_policy(REPO_POLICY_PATH))
+    policy = PolicyService(engine, mcp_stack.ledger)
+    payment = _payment_adapter(mcp_stack, tmp_path)
+    rules = MerchantRules(max_discount_pct=15, min_margin_pct=12, blacklist_skus=frozenset({"SKU-0042"}))
+    runner = BuyerSessionRunner(
+        agent=agent,
+        buyer_mcp=mcp_stack.buyer_mcp,
+        sessions=mcp_stack.sessions,
+        catalog=mcp_stack.catalog,
+        ledger=mcp_stack.ledger,
+        policy=policy,
+        payment=payment,
+        upsell_strategy=RulesStrategy(mcp_stack.catalog),
+        merchant_rules=rules,
+        merchant_mcp=mcp_stack.merchant_mcp,
+    )
+
+    result = await runner.run(txn, "Buy a birthday gift under Rs 2000 for my 10-year-old nephew")
+
+    assert result.outcome == "order_created"
+    assert len(result.cart_view["items"]) == 1  # the upsell item was never applied
+
+    entries = mcp_stack.ledger.entries_for_transaction(txn)
+    parse_failures = [e for e in entries if e.action_type == ActionType.PARSE_FAILURE]
+    assert len(parse_failures) == 1
+    assert parse_failures[0].machine_reason == "UPSELL_RESPONSE_PARSE_FAILURE"
+    assert mcp_stack.ledger.verify_chain().ok is True

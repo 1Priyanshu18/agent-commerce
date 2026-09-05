@@ -140,6 +140,24 @@ def test_offered_true_missing_sku_fails_closed(make_catalog) -> None:
     assert "parse failure" in decision.reasoning
 
 
+def test_llm_call_raising_fails_closed_to_no_offer(make_catalog) -> None:
+    # Observed live: Groq's server-side tool-call validation can reject a response that omits
+    # a nullable field entirely (rather than sending it as null), raising before any response
+    # object exists to parse. This class promises to fail closed on any malformed decision —
+    # that promise must hold even when the failure happens before parsing gets a chance to run.
+    class _RaisingLLM(FakeLLMClient):
+        def complete(self, **kwargs):
+            raise RuntimeError("simulated server-side tool-call validation failure")
+
+    catalog = make_catalog(_PRODUCTS)
+    strategy = LLMStrategy(_RaisingLLM([]), catalog)
+
+    decision = strategy.decide(_cart_with_a001(), _rules())
+
+    assert isinstance(decision, NoOffer)
+    assert "parse failure" in decision.reasoning
+
+
 def test_hallucinated_sku_not_in_candidates_fails_closed(make_catalog) -> None:
     catalog = make_catalog(_PRODUCTS)
     llm = FakeLLMClient(

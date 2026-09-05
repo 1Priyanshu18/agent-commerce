@@ -292,3 +292,44 @@ explicitly as scripted rather than presented as a live run. The mechanism it exe
 (injection, a real budget-ceiling `DENY`, the structured recovery hint, the `caused_by` link)
 is identical to what a converging live run would show — only the model's own planning is
 absent.
+
+## 2026-09-05 — Two more bugs found running Phase 8, and where Phase 8 stopped
+
+**Bug 1: Groq's server-side tool-call validation rejects an omitted nullable field, raising
+before any response exists to parse.** Both `respond_to_offer` (buyer's ACCEPT/DECLINE/COUNTER
+decision) and `upsell_decision` (merchant's `LLMStrategy`) declare a field as
+`"type": ["integer"/"string", "null"]` with that field listed in `required` — the schema
+allows `null`, but the model sometimes omits the key entirely instead of sending it as `null`,
+and Groq's validator rejects that as a missing required property with a `400`, before
+`GeminiLLMClient`/`GroqLLMClient` even returns a response object. This hit both
+`BuyerAgent.decide_on_offer` (via `run_session.py:_maybe_run_upsell`) and
+`LLMStrategy.decide` (`agents/upsell/llm.py`) — reproducible on gpt-oss-120b too, not just
+gpt-oss-20b (see the Step 3 model test below). Both call sites now catch the exception and
+fail closed exactly like an unparseable response would (DECLINE / `NoOffer` respectively),
+matching each one's own pre-existing fail-closed philosophy — extended to cover a failure that
+happens before parsing gets a chance to run at all. Neither is caught by any
+`FakeLLMClient`-only test, same pattern as Phase 7's bugs.
+
+**Bug 2: goal wording that doesn't match the catalog's actual tags can send the agent into an
+unproductive search loop.** `eval/goals.yaml`'s G05 originally read "Buy a small toy for a
+toddler, strict budget Rs 700" — the catalog's only "toddler"-tagged product (SKU-0001) is
+priced above that budget, while the two products that actually satisfy it are tagged
+plush/cuddly and puzzle/hobby, not toddler. Live, the agent searched 8+ times trying to find a
+"toddler" match within budget and never committed to anything, consuming most of its 12-turn
+budget on searches alone (each call slower than the last from rate-limit backoff, making the
+session look hung rather than just unproductive). Reworded to match the satisfying SKUs'
+actual tags directly ("Buy a plush toy or a puzzle as a birthday gift..."); converged in 4
+calls immediately after. Lesson carried forward for the remaining goals (G08, G14, and any
+future expansion): word each goal against the catalog's real tags/names for the SKUs it's
+supposed to satisfy, not just against what sounds natural — a natural-sounding goal that
+doesn't line up with the catalog's own vocabulary is a goal-design bug, not just bad luck.
+
+**Where Phase 8 stopped, and why:** the minimal-grid plan (Amendment 2 in
+`docs/PHASE_8_SPEC.md`) got through the injection suite (6/6 products, complete) and 14 of 24
+core-grid cells (G01 and G05 fully complete, G08 2/6, G14 not run) before hitting Groq's real
+daily token quota — 199,568/200,000 TPD used, a genuine `429`, not a self-imposed budget guard
+or the 4-hour timebox. `eval/report.py` generates `eval/report.md` and two plots from
+whatever's checkpointed in `eval/results.json` at any point, so the report reflects exactly
+this partial state, labeled as such throughout (see the report's own "Methodology &
+limitations" section, which leads with exactly what's complete vs. partial vs. not run).
+Decision: stop here rather than wait for quota to free up, to protect time for Phases 9-10.

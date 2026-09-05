@@ -16,16 +16,19 @@ an orchestrator-level bounded retry, not something the agent needs to react to.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastmcp import FastMCP
 
 from agent_commerce.agents.buyer.agent import BuyerAgent
 from agent_commerce.agents.buyer.constraints import BuyerConstraints
-from agent_commerce.cart.models import Cart
+from agent_commerce.agents.buyer.output import DecisionType
+from agent_commerce.agents.upsell.strategy import MerchantRules, NoOffer, UpsellStrategy
+from agent_commerce.cart.models import Cart, CartItem
 from agent_commerce.catalog.store import CatalogStore
 from agent_commerce.core.llm import Message, ToolSpec
 from agent_commerce.core.money import Money
@@ -37,6 +40,7 @@ from agent_commerce.payments.models import OrderRecord
 from agent_commerce.payments.simulated import SimulatedPaymentAdapter
 from agent_commerce.policy.service import PolicyService
 
+from .negotiation import resolve_small_gap
 from .session import SessionRegistry
 
 # 8 was enough for the happy path alone (search, add, checkout ≈ 3-4 turns); recovering from
@@ -74,6 +78,12 @@ class SessionResult:
     turns_used: int
     denial_reason: str | None = None
     injected_failure: str | None = None
+    # Every non-empty assistant response.text across the main tool-loop turns, in order — not
+    # logged to the ledger anywhere else (only structured tool results are). Exists for
+    # analyses that need the agent's own raw reasoning text, e.g. the Phase 8 prompt-injection
+    # suite checking whether the agent's language shows it complying with an injected
+    # instruction, independent of whether any tool call actually carried it out.
+    assistant_texts: list[str] = field(default_factory=list)
 
 
 class BuyerSessionRunner:
@@ -88,6 +98,9 @@ class BuyerSessionRunner:
         policy: PolicyService,
         payment: PaymentAdapter,
         simulated_payment_adapter: SimulatedPaymentAdapter | None = None,
+        upsell_strategy: UpsellStrategy | None = None,
+        merchant_rules: MerchantRules | None = None,
+        merchant_mcp: FastMCP | None = None,
     ) -> None:
         self._agent = agent
         self._buyer_mcp = buyer_mcp
@@ -99,6 +112,13 @@ class BuyerSessionRunner:
         # test/demo concern of running a session, never part of the real production stack.
         self._payment = FailureInjectingPaymentAdapter(payment)
         self._simulated_payment_adapter = simulated_payment_adapter
+        if upsell_strategy is not None and (merchant_rules is None or merchant_mcp is None):
+            raise ValueError(
+                "upsell_strategy requires both merchant_rules and merchant_mcp to be provided"
+            )
+        self._upsell_strategy = upsell_strategy
+        self._merchant_rules = merchant_rules
+        self._merchant_mcp = merchant_mcp
 
     def _caused_by(self, transaction_id: str) -> list[str]:
         last = self._ledger.last_entry_id(transaction_id)
@@ -171,11 +191,15 @@ class BuyerSessionRunner:
         denial_reason: str | None = None
         outcome = "no_purchase"
         turns_used = 0
+        assistant_texts: list[str] = []
         injection_state: dict[str, Any] = {"stock_conflict_fired": False, "policy_deny_ceiling_paise": None}
+        upsell_state: dict[str, Any] = {"attempted": False}
 
         for turn in range(MAX_TOOL_LOOP_TURNS):
             turns_used = turn + 1
             response = self._agent.next_turn(system=system, messages=messages, tools=tools)
+            if response.text:
+                assistant_texts.append(response.text)
             assistant_message = Message(
                 role="assistant", content=response.text or None, tool_calls=tuple(response.tool_calls)
             )
@@ -193,6 +217,7 @@ class BuyerSessionRunner:
                     tool_input=tc.arguments or {},
                     active_injection=active_injection,
                     injection_state=injection_state,
+                    upsell_state=upsell_state,
                 )
                 messages.append(
                     Message(role="tool", content=json.dumps(result), tool_call_id=tc.id, tool_name=tc.name)
@@ -231,6 +256,7 @@ class BuyerSessionRunner:
             turns_used=turns_used,
             denial_reason=denial_reason,
             injected_failure=active_injection,
+            assistant_texts=assistant_texts,
         )
 
     def _check_stock_conflict(self, cart: Cart) -> tuple[str | None, int]:
@@ -239,6 +265,171 @@ class BuyerSessionRunner:
             if product is not None and item.quantity > product.stock:
                 return sku, product.stock
         return None, 0
+
+    async def _maybe_run_upsell(
+        self, *, transaction_id: str, constraints: BuyerConstraints, upsell_state: dict[str, Any]
+    ) -> None:
+        """At most once per session (Phase 8 grid dimension): after the first successful
+        cart.add, let the configured upsell strategy decide whether to offer a complementary
+        item, and if so, run the buyer's ACCEPT/DECLINE/COUNTER decision (a standalone LLM
+        call — see BuyerAgent.decide_on_offer — same pattern that method already used before
+        this was wired in) and the small-gap negotiation heuristic. Everything here is
+        reconstructible from the ledger afterward; nothing is added to SessionResult.
+        """
+        if self._upsell_strategy is None or upsell_state["attempted"]:
+            return
+        upsell_state["attempted"] = True
+        cart = self._sessions.get_or_create(transaction_id)
+        if not cart.items:
+            return
+
+        decision = self._upsell_strategy.decide(cart, self._merchant_rules)
+        cart_total_before_upsell_paise = cart.total_paise
+
+        if isinstance(decision, NoOffer):
+            await self._merchant_mcp.call_tool(
+                "upsell.no_offer", {"transaction_id": transaction_id, "reasoning": decision.reasoning}
+            )
+            return
+
+        product = self._catalog.get(decision.sku)
+        if product is None:
+            return
+        discounted_price_paise = round(product.price_paise * (1 - decision.discount_pct / 100))
+
+        offer_result = await self._merchant_mcp.call_tool(
+            "upsell.make_offer",
+            {
+                "transaction_id": transaction_id,
+                "sku": decision.sku,
+                "discount_pct": decision.discount_pct,
+                "reasoning": decision.reasoning,
+            },
+        )
+        offer_entry_id = dict(offer_result.structured_content or {}).get("entry_id", "")
+
+        try:
+            buyer_decision, parse_method = self._agent.decide_on_offer(
+                constraints=constraints,
+                cart_total_paise=cart.total_paise,
+                offer_sku=decision.sku,
+                offer_name=product.name,
+                discounted_price_paise=discounted_price_paise,
+                reasoning=decision.reasoning,
+            )
+        except Exception as e:  # noqa: BLE001 — a malformed side-decision must never crash
+            # the whole buying session; fail closed exactly like an unparseable response.
+            # Observed live: Groq's server-side tool-call validation can reject a response
+            # that omits a nullable field (counter_price_paise) entirely instead of sending it
+            # as null, raising before any response object exists for parse_buyer_decision to
+            # even see.
+            buyer_decision, parse_method = None, f"error: {e}"
+
+        if buyer_decision is None:
+            self._ledger.append(
+                transaction_id=transaction_id,
+                caused_by=[offer_entry_id] if offer_entry_id else self._caused_by(transaction_id),
+                actor=Actor.BUYER_AGENT,
+                action_type=ActionType.PARSE_FAILURE,
+                input={"parse_method": parse_method},
+                output={},
+                machine_reason="UPSELL_RESPONSE_PARSE_FAILURE",
+                human_reason=(
+                    "buyer's response to the upsell offer could not be parsed (neither tool "
+                    "call nor marker); failing closed to DECLINE"
+                ),
+            )
+            return
+
+        final_decision = buyer_decision.decision
+        forced_by_small_gap = False
+        if buyer_decision.decision == DecisionType.COUNTER:
+            forced = resolve_small_gap(
+                offer_price_paise=discounted_price_paise,
+                counter_price_paise=buyer_decision.counter_price_paise or 0,
+                cart_total_before_upsell_paise=cart_total_before_upsell_paise,
+                hard_ceiling_paise=constraints.budget_ceiling_paise,
+            )
+            if forced is not None:
+                final_decision = DecisionType(forced.decision)
+                forced_by_small_gap = True
+            else:
+                # Gap too large for the heuristic; this simplified one-offer-per-session model
+                # has no further negotiation round, so a counter that isn't small-gap-resolved
+                # closes as a decline rather than looping indefinitely.
+                final_decision = DecisionType.DECLINE
+
+        await self._buyer_mcp.call_tool(
+            "upsell.respond",
+            {
+                "transaction_id": transaction_id,
+                "offer_entry_id": offer_entry_id,
+                "decision": final_decision.value,
+                "counter_price_paise": buyer_decision.counter_price_paise,
+            },
+        )
+
+        if final_decision != DecisionType.ACCEPT:
+            return
+
+        # Simulate the post-accept cart to run the "cart.accept_upsell" policy gate
+        # (discount_cap / margin_floor) before applying anything for real.
+        simulated_cart = copy.deepcopy(cart)
+        simulated_cart.add(
+            CartItem(
+                sku=product.sku,
+                name=product.name,
+                unit_price_paise=discounted_price_paise,
+                unit_cost_paise=product.cost_paise,
+                quantity=1,
+            )
+        )
+        verdict = self._policy.check(
+            actor=Actor.BUYER_AGENT,
+            tool_name="cart.accept_upsell",
+            arguments={
+                "offer": {"discount_pct": decision.discount_pct},
+                "cart": simulated_cart.to_view(),
+            },
+            state=None,
+            transaction_id=transaction_id,
+            caused_by=self._caused_by(transaction_id),
+        )
+        if verdict.outcome == PolicyVerdict.DENY:
+            return  # accepted offer not applied — the policy gate wins
+
+        applied_discount_pct = decision.discount_pct
+        applied_price_paise = discounted_price_paise
+        if verdict.outcome == PolicyVerdict.TRANSFORM and verdict.transformed_arguments:
+            transformed_offer = verdict.transformed_arguments.get("offer", {})
+            applied_discount_pct = transformed_offer.get("discount_pct", applied_discount_pct)
+            applied_price_paise = round(product.price_paise * (1 - applied_discount_pct / 100))
+
+        cart.add(
+            CartItem(
+                sku=product.sku,
+                name=product.name,
+                unit_price_paise=applied_price_paise,
+                unit_cost_paise=product.cost_paise,
+                quantity=1,
+            )
+        )
+        self._ledger.append(
+            transaction_id=transaction_id,
+            caused_by=self._caused_by(transaction_id),
+            actor=Actor.BUYER_AGENT,
+            action_type=ActionType.SELECT,
+            input={
+                "op": "add",
+                "sku": product.sku,
+                "quantity": 1,
+                "discount_pct": applied_discount_pct,
+                "source": "upsell_accepted",
+                "forced_by_small_gap": forced_by_small_gap,
+            },
+            output=cart.to_view(),
+            resulting_state=cart.to_view(),
+        )
 
     async def _execute_tool_call(
         self,
@@ -249,6 +440,7 @@ class BuyerSessionRunner:
         tool_input: dict,
         active_injection: str | None,
         injection_state: dict[str, Any],
+        upsell_state: dict[str, Any],
     ) -> tuple[dict, str]:
         # The orchestrator owns which transaction this session is — never the agent's guess.
         # A real LLM has no way to know the session's real transaction_id unless told, and
@@ -377,6 +569,11 @@ class BuyerSessionRunner:
             return {"error": str(e)}, "error"
 
         output = dict(call_result.structured_content or {})
+
+        if tool_name == "cart.add":
+            await self._maybe_run_upsell(
+                transaction_id=transaction_id, constraints=constraints, upsell_state=upsell_state
+            )
 
         if tool_name == "checkout.confirm":
             cart_view = output.get("cart", {})

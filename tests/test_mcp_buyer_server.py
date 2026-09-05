@@ -14,7 +14,10 @@ async def test_catalog_search_returns_products_and_logs_search(mcp_stack: Simple
     )
     data = result.structured_content
     assert len(data["products"]) > 0
-    assert all(p["category"] == "Toys & Games" for p in data["products"])
+    # The list view is trimmed to minimal fields (Phase 8 Step 2, docs/PHASE_8_SPEC.md) — no
+    # category in the payload itself, so the filter is checked against the real catalog record.
+    assert all(mcp_stack.catalog.get(p["sku"]).category == "Toys & Games" for p in data["products"])
+    assert all(set(p.keys()) == {"sku", "name", "price_paise", "stock"} for p in data["products"])
 
     entries = mcp_stack.ledger.entries_for_transaction("txn_1")
     assert len(entries) == 1
@@ -30,7 +33,7 @@ async def test_catalog_search_caps_results_returned_to_the_agent(mcp_stack: Simp
     result = await mcp_stack.buyer_mcp.call_tool("catalog.search", {"transaction_id": "txn_1"})
     data = result.structured_content
 
-    assert len(data["products"]) <= 10
+    assert len(data["products"]) <= 5
     assert data["total_matches"] > len(data["products"])
     assert "hint" in data
 

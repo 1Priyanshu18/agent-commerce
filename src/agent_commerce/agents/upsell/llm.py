@@ -105,13 +105,21 @@ class LLMStrategy:
         system = _SYSTEM_PROMPT_TEMPLATE.format(
             max_discount_pct=rules.max_discount_pct, min_margin_pct=rules.min_margin_pct
         )
-        response = self._llm.complete(
-            system=system,
-            messages=[Message(role="user", content=_build_prompt(cart, candidates))],
-            tools=[_DECIDE_TOOL],
-            tool_choice=ToolChoice(mode="specific", tool_name="upsell_decision"),
-            max_tokens=1024,
-        )
+        try:
+            response = self._llm.complete(
+                system=system,
+                messages=[Message(role="user", content=_build_prompt(cart, candidates))],
+                tools=[_DECIDE_TOOL],
+                tool_choice=ToolChoice(mode="specific", tool_name="upsell_decision"),
+                max_tokens=1024,
+            )
+        except Exception as e:  # noqa: BLE001 — this class promises to fail closed to NoOffer
+            # on any malformed decision; a request that fails before a response even exists
+            # (observed live: Groq's server-side tool-call validation rejecting a response
+            # that omits a nullable field entirely instead of sending it as null) is the same
+            # kind of failure as a response that parses to nonsense, just caught earlier.
+            logger.warning("upsell LLM strategy call failed: %s", e)
+            return NoOffer(reasoning=f"parse failure: upsell decision call failed ({e})")
 
         decision = self._parse(response, candidates, rules)
         check = check_dark_patterns(decision.reasoning)

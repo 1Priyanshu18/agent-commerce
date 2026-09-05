@@ -30,7 +30,12 @@ _ACTOR = Actor.BUYER_AGENT
 # — now carrying that whole payload — exceeded the 8,000 TPM cap outright). The ledger's own
 # SEARCH entry still records the true, untruncated count (catalog/service.py) — only what's
 # handed back to the LLM is capped.
-_MAX_SEARCH_RESULTS = 10
+# Phase 8 Step 2 (history trimming, docs/PHASE_8_SPEC.md): 5, not 10 — measured tokens/call
+# during Phase 7 grew 370 -> 5,755 largely from search-result payloads sitting in growing
+# conversation history. A full product dict (description/tags/variants/cost) is far more than
+# the agent needs to decide what to search for or add next; catalog.get_details still returns
+# everything for the one item the agent is actually about to commit to.
+_MAX_SEARCH_RESULTS = 5
 
 
 def build_buyer_server(
@@ -76,7 +81,13 @@ def build_buyer_server(
         shown = results[:_MAX_SEARCH_RESULTS]
         response = {
             "entry_id": entry.entry_id,
-            "products": [p.to_dict() for p in shown],
+            # Minimal fields only — enough to pick a candidate or narrow the search further.
+            # Full detail (description, tags, variants, cost) is one catalog.get_details call
+            # away for whichever specific item the agent is about to commit to.
+            "products": [
+                {"sku": p.sku, "name": p.name, "price_paise": p.price_paise, "stock": p.stock}
+                for p in shown
+            ],
             "total_matches": total_matches,
         }
         if total_matches > len(shown):
