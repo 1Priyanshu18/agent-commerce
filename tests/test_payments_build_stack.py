@@ -23,6 +23,7 @@ def _config(**overrides) -> Config:
         razorpay_key_secret="",
         razorpay_webhook_secret="test_secret",
         reconcile_poll_interval_seconds=30,
+        pending_reconciliation_threshold_seconds=30,
         data_dir="data",
     )
     defaults.update(overrides)

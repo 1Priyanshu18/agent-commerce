@@ -25,7 +25,10 @@ def _contents_from_messages(messages: list[Message]) -> list[gtypes.Content]:
                 parts.append(gtypes.Part(text=m.content))
             for tc in m.tool_calls:
                 fc = gtypes.FunctionCall(id=tc.id, name=tc.name, args=tc.arguments)
-                parts.append(gtypes.Part(function_call=fc))
+                # Gemini's API requires thought_signature to be echoed back verbatim on
+                # multi-turn tool use with thinking-capable models — dropping it is a 400.
+                thought_signature = (tc.provider_metadata or {}).get("thought_signature")
+                parts.append(gtypes.Part(function_call=fc, thought_signature=thought_signature))
             contents.append(gtypes.Content(role="model", parts=parts))
             in_tool_result_batch = False
         elif m.role == "tool":
@@ -111,9 +114,25 @@ class GeminiLLMClient:
             raise RetryableError(str(e)) from e
 
         text = response.text or ""
+        # Iterate parts directly (not the response.function_calls convenience property) —
+        # thought_signature lives on the same Part as function_call, and the convenience
+        # property doesn't carry it.
+        response_parts = (
+            response.candidates[0].content.parts
+            if response.candidates and response.candidates[0].content
+            else []
+        ) or []
         tool_calls = [
-            ToolCall(id=fc.id or fc.name or "", name=fc.name or "", arguments=dict(fc.args or {}))
-            for fc in (response.function_calls or [])
+            ToolCall(
+                id=part.function_call.id or part.function_call.name or "",
+                name=part.function_call.name or "",
+                arguments=dict(part.function_call.args or {}),
+                provider_metadata=(
+                    {"thought_signature": part.thought_signature} if part.thought_signature else None
+                ),
+            )
+            for part in response_parts
+            if part.function_call is not None
         ]
         finish_reason = response.candidates[0].finish_reason if response.candidates else None
         finish_name = finish_reason.name if finish_reason is not None else ""

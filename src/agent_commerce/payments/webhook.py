@@ -20,6 +20,20 @@ from agent_commerce.ledger.store import LedgerStore
 from .webhook_store import WebhookRecord, WebhookStore
 
 
+class UnwiredReconciliationCallbackError(RuntimeError):
+    """A new webhook arrived that should trigger reconciliation, but on_new_webhook was never
+    wired. Composing the full payment stack has a genuine circular dependency (see
+    payments/__init__.py) that's broken by setting this callback after construction rather
+    than requiring it up front — which converts "reconciliation is wired" from a
+    construction-time guarantee into a runtime one. This exception is what keeps that runtime
+    gap loud: without it, a webhook would be stored and ledger-logged but reconciliation would
+    silently never fire, and the order would sit at "created" forever with no signal anything
+    is wrong. If a handler genuinely doesn't need reconciliation (e.g. a test that only
+    exercises signature verification), pass an explicit no-op callback rather than omitting
+    on_new_webhook.
+    """
+
+
 @dataclass(frozen=True)
 class WebhookHandlingResult:
     accepted: bool
@@ -99,7 +113,12 @@ class WebhookHandler:
             reasoning_summary=f"received {'new' if is_new else 'duplicate'} webhook: {event}",
         )
 
-        if is_new and order_id and self.on_new_webhook is not None:
+        if is_new and order_id:
+            if self.on_new_webhook is None:
+                raise UnwiredReconciliationCallbackError(
+                    f"a new webhook for order {order_id} arrived but no on_new_webhook "
+                    "callback is wired — reconciliation was never triggered"
+                )
             self.on_new_webhook(order_id)
 
         return WebhookHandlingResult(accepted=True, is_new=is_new, reason=None, record=record)

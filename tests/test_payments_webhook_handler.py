@@ -2,6 +2,8 @@ import hashlib
 import hmac
 import json
 
+import pytest
+
 from agent_commerce.ledger.models import ActionType
 from agent_commerce.ledger.store import LedgerStore
 from agent_commerce.payments.webhook import WebhookHandler
@@ -36,7 +38,12 @@ def _sign(body: bytes, secret: str = SECRET) -> str:
 def _handler(tmp_path):
     store = WebhookStore(tmp_path / "webhooks.db")
     ledger = LedgerStore(tmp_path / "ledger.db")
-    return WebhookHandler(webhook_secret=SECRET, store=store, ledger=ledger), store, ledger
+    # Explicit no-op: these tests exercise signature verification and storage, not
+    # reconciliation — an intentional opt-out, not an accidental omission.
+    handler = WebhookHandler(
+        webhook_secret=SECRET, store=store, ledger=ledger, on_new_webhook=lambda order_id: None
+    )
+    return handler, store, ledger
 
 
 def test_valid_signature_is_accepted(tmp_path) -> None:
@@ -125,3 +132,22 @@ def test_missing_event_field_is_rejected(tmp_path) -> None:
     result = handler.handle(raw_body=body, signature=_sign(body))
     assert result.accepted is False
     assert result.reason == "missing event or payment id"
+
+
+def test_new_webhook_with_no_callback_wired_raises_instead_of_silently_dropping(tmp_path) -> None:
+    # A webhook that should trigger reconciliation but can't (no on_new_webhook wired) must
+    # fail loudly — silently dropping it means an order can sit at "created" forever with no
+    # signal anything is wrong.
+    from agent_commerce.payments.webhook import UnwiredReconciliationCallbackError
+
+    store = WebhookStore(tmp_path / "webhooks.db")
+    ledger = LedgerStore(tmp_path / "ledger.db")
+    handler = WebhookHandler(webhook_secret=SECRET, store=store, ledger=ledger)  # no on_new_webhook
+    body = _body()
+
+    with pytest.raises(UnwiredReconciliationCallbackError, match="order_1"):
+        handler.handle(raw_body=body, signature=_sign(body))
+
+    # The webhook itself must still be durably stored — the loud failure is about
+    # reconciliation never being triggered, not about losing the audit record.
+    assert len(store.get_for_order("order_1")) == 1

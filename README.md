@@ -120,8 +120,11 @@ produce one real, recorded test-mode session:
   (`anthropic.py`, `gemini.py`, `groq.py`, and `fake.py` for tests) translate to/from each
   provider's actual wire format. `CachingLLMClient` (disk-backed, keyed by a hash of the full
   request) and `GuardedLLMClient` (rate limiting, retry/backoff, a hard per-run call budget)
-  wrap any adapter. `LLM_PROVIDER` selects the active one — Gemini is the development default
-  (free tier); Anthropic is kept for a final paid run once the harness works.
+  wrap any adapter. `LLM_PROVIDER` selects the active one — Groq is the primary provider
+  (free tier: 1,000 requests/day, 200K tokens/day on `openai/gpt-oss-120b`, both confirmed
+  live). Gemini's free tier caps at 20 requests/day and is used only for the Phase 8
+  cross-model robustness check, not the main eval grid — see `docs/PROGRESS.md`. Anthropic is
+  kept for a final paid run once the harness works.
 - **`agents/buyer/`** — the buyer agent. `constraints.py` extracts a typed `BuyerConstraints`
   (hard budget ceiling vs. soft target) from a natural-language goal via a forced tool call.
   `agent.py` drives a real multi-turn tool-use loop against the buyer MCP server. `output.py`

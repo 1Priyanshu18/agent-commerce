@@ -22,6 +22,15 @@ from agent_commerce.orchestrator.session import SessionRegistry
 from .authz import authorize
 
 _ACTOR = Actor.BUYER_AGENT
+# Caps what the agent sees per search, independent of how broad its filters are — an
+# unfiltered or over-broad query against the full catalog (72 products, each with a
+# description/tags/variants) can otherwise dump enough tokens into conversation history to
+# overflow a provider's per-request token limit on a later turn (observed live against
+# Groq's free tier: an unfiltered search returned all 72 products, and the next turn's request
+# — now carrying that whole payload — exceeded the 8,000 TPM cap outright). The ledger's own
+# SEARCH entry still records the true, untruncated count (catalog/service.py) — only what's
+# handed back to the LLM is capped.
+_MAX_SEARCH_RESULTS = 10
 
 
 def build_buyer_server(
@@ -63,7 +72,19 @@ def build_buyer_server(
         results, entry = catalog_service.search(
             query, transaction_id=transaction_id, actor=_ACTOR, caused_by=_caused_by(transaction_id)
         )
-        return {"entry_id": entry.entry_id, "products": [p.to_dict() for p in results]}
+        total_matches = len(results)
+        shown = results[:_MAX_SEARCH_RESULTS]
+        response = {
+            "entry_id": entry.entry_id,
+            "products": [p.to_dict() for p in shown],
+            "total_matches": total_matches,
+        }
+        if total_matches > len(shown):
+            response["hint"] = (
+                f"showing {len(shown)} of {total_matches} matches — narrow with category/"
+                "max_price_paise/tags/text for a more precise set instead of an unfiltered search"
+            )
+        return response
 
     @mcp.tool(name="catalog.get_details")
     def catalog_get_details(transaction_id: str, sku: str) -> dict:

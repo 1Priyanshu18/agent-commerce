@@ -19,10 +19,16 @@ class BuyerAgent:
     def extract_constraints(self, goal_text: str) -> BuyerConstraints:
         return extract_constraints(self._llm, goal_text)
 
-    def system_prompt(self, constraints: BuyerConstraints) -> str:
+    def system_prompt(self, constraints: BuyerConstraints, *, categories: list[str] | None = None) -> str:
         must_have = ", ".join(constraints.must_have) if constraints.must_have else "none specified"
         soft_target = (
             Money(constraints.soft_target_paise).format_inr() if constraints.soft_target_paise else "none"
+        )
+        category_hint = (
+            f"Valid catalog categories (use one of these exact strings for catalog.search's "
+            f"category filter — anything else returns zero results): {', '.join(categories)}\n"
+            if categories
+            else ""
         )
         return (
             "You are a buyer agent shopping on behalf of a user. Use the available tools to "
@@ -32,10 +38,23 @@ class BuyerAgent:
             "cart total must never exceed this.\n"
             f"Soft target (a preference, not a hard limit): {soft_target}\n"
             f"Category: {constraints.category or 'unspecified'}\n"
+            f"{category_hint}"
             f"Recipient: {constraints.recipient_context or 'unspecified'}\n"
             f"Must-haves: {must_have}\n"
             f"Deadline: {constraints.deadline or 'none'}\n\n"
-            "Search first, review the results, add one suitable item, then confirm checkout."
+            "Search first, review the results, add one suitable item, then confirm checkout. "
+            "One or two searches are usually enough — narrow with category/price/tags rather "
+            "than issuing many near-duplicate searches, since each turn is limited. If a search "
+            "returns zero results, don't keep guessing category strings — search by text/tags "
+            "instead, or omit the category filter.\n\n"
+            "If a tool call returns an error (e.g. stock_conflict, policy_denied), read its "
+            "human_reason and adapt — remove or replace the affected item, or otherwise adjust "
+            "the cart — rather than repeating the same call unchanged. In particular, if "
+            "checkout.confirm is denied for exceeding the budget ceiling, use cart.remove to "
+            "take the current item(s) back out before adding a cheaper replacement — adding "
+            "another item on top only makes the total worse. Once cart.add succeeds, call "
+            "checkout.confirm immediately — do not keep searching for a better option once "
+            "you already have a suitable item in the cart."
         )
 
     def next_turn(self, *, system: str, messages: list[Message], tools: list[ToolSpec]) -> LLMResponse:

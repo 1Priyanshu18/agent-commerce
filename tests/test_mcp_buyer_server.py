@@ -22,6 +22,22 @@ async def test_catalog_search_returns_products_and_logs_search(mcp_stack: Simple
     assert entries[0].actor == Actor.BUYER_AGENT
 
 
+async def test_catalog_search_caps_results_returned_to_the_agent(mcp_stack: SimpleNamespace) -> None:
+    # An unfiltered (or over-broad) search against the full catalog must not hand the agent
+    # every product — that's enough tokens to overflow a provider's per-request limit on the
+    # next turn (observed live: 72 products blew a Groq free-tier 8,000 TPM cap outright). The
+    # ledger's own SEARCH entry still records the true count; only the tool response is capped.
+    result = await mcp_stack.buyer_mcp.call_tool("catalog.search", {"transaction_id": "txn_1"})
+    data = result.structured_content
+
+    assert len(data["products"]) <= 10
+    assert data["total_matches"] > len(data["products"])
+    assert "hint" in data
+
+    entries = mcp_stack.ledger.entries_for_transaction("txn_1")
+    assert entries[0].output["count"] == data["total_matches"]
+
+
 async def test_catalog_get_details_returns_product(mcp_stack: SimpleNamespace) -> None:
     result = await mcp_stack.buyer_mcp.call_tool(
         "catalog.get_details", {"transaction_id": "txn_1", "sku": "SKU-0001"}

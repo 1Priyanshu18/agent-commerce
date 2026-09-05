@@ -332,8 +332,21 @@ class _GeminiFunctionCall:
 
 
 @dataclass
+class _GeminiPart:
+    function_call: _GeminiFunctionCall | None = None
+    thought_signature: bytes | None = None
+    text: str | None = None
+
+
+@dataclass
+class _GeminiContent:
+    parts: list[_GeminiPart] = field(default_factory=list)
+
+
+@dataclass
 class _GeminiCandidate:
     finish_reason: _GeminiFinishReason
+    content: _GeminiContent = field(default_factory=_GeminiContent)
 
 
 @dataclass
@@ -345,7 +358,6 @@ class _GeminiUsageMetadata:
 @dataclass
 class _GeminiResponse:
     text: str
-    function_calls: list[_GeminiFunctionCall]
     candidates: list[_GeminiCandidate]
     usage_metadata: _GeminiUsageMetadata = field(default_factory=_GeminiUsageMetadata)
 
@@ -372,7 +384,6 @@ def test_gemini_normalizes_text_response() -> None:
 
     raw = _GeminiResponse(
         text="hello from gemini",
-        function_calls=[],
         candidates=[_GeminiCandidate(_GeminiFinishReason("STOP"))],
     )
     client = GeminiLLMClient(api_key="x", model="gemini-2.5-flash", client=_FakeGeminiSDK(raw))
@@ -388,10 +399,10 @@ def test_gemini_normalizes_text_response() -> None:
 def test_gemini_normalizes_function_call_response() -> None:
     from agent_commerce.core.llm.gemini import GeminiLLMClient
 
+    part = _GeminiPart(function_call=_GeminiFunctionCall(name="my_tool", args={"a": 1}, id="fc_1"))
     raw = _GeminiResponse(
         text="",
-        function_calls=[_GeminiFunctionCall(name="my_tool", args={"a": 1}, id="fc_1")],
-        candidates=[_GeminiCandidate(_GeminiFinishReason("STOP"))],
+        candidates=[_GeminiCandidate(_GeminiFinishReason("STOP"), content=_GeminiContent(parts=[part]))],
     )
     client = GeminiLLMClient(api_key="x", model="m", client=_FakeGeminiSDK(raw))
 
@@ -405,11 +416,68 @@ def test_gemini_normalizes_function_call_response() -> None:
     assert response.stop_reason == "tool_use"
 
 
+def test_gemini_carries_thought_signature_into_provider_metadata() -> None:
+    # Gemini's API requires this to be echoed back verbatim on the next turn for multi-turn
+    # tool use with thinking-capable models — dropping it is a 400 (confirmed live).
+    from agent_commerce.core.llm.gemini import GeminiLLMClient
+
+    part = _GeminiPart(
+        function_call=_GeminiFunctionCall(name="my_tool", args={"a": 1}, id="fc_1"),
+        thought_signature=b"opaque-signature-bytes",
+    )
+    raw = _GeminiResponse(
+        text="",
+        candidates=[_GeminiCandidate(_GeminiFinishReason("STOP"), content=_GeminiContent(parts=[part]))],
+    )
+    client = GeminiLLMClient(api_key="x", model="m", client=_FakeGeminiSDK(raw))
+
+    response = client.complete(
+        system="sys",
+        messages=[Message(role="user", content="hi")],
+        tools=[ToolSpec(name="my_tool", description="d", input_schema={})],
+    )
+
+    assert response.tool_calls[0].provider_metadata == {"thought_signature": b"opaque-signature-bytes"}
+
+
+def test_gemini_echoes_thought_signature_back_on_the_next_turn() -> None:
+    from agent_commerce.core.llm.gemini import GeminiLLMClient
+
+    raw = _GeminiResponse(
+        text="ok",
+        candidates=[_GeminiCandidate(_GeminiFinishReason("STOP"), content=_GeminiContent(parts=[]))],
+    )
+    sdk = _FakeGeminiSDK(raw)
+    client = GeminiLLMClient(api_key="x", model="m", client=sdk)
+
+    messages = [
+        Message(role="user", content="go"),
+        Message(
+            role="assistant",
+            tool_calls=(
+                ToolCall(
+                    id="fc_1",
+                    name="my_tool",
+                    arguments={"a": 1},
+                    provider_metadata={"thought_signature": b"opaque-signature-bytes"},
+                ),
+            ),
+        ),
+        Message(role="tool", content="result", tool_call_id="fc_1", tool_name="my_tool"),
+    ]
+    client.complete(system="sys", messages=messages)
+
+    contents = sdk.models.received_kwargs["contents"]
+    model_content = next(c for c in contents if c.role == "model")
+    fc_part = next(p for p in model_content.parts if p.function_call is not None)
+    assert fc_part.thought_signature == b"opaque-signature-bytes"
+
+
 def test_gemini_sends_forced_tool_choice_via_allowed_function_names() -> None:
     from agent_commerce.core.llm.gemini import GeminiLLMClient
 
-    candidates = [_GeminiCandidate(_GeminiFinishReason("STOP"))]
-    raw = _GeminiResponse(text="x", function_calls=[], candidates=candidates)
+    candidates = [_GeminiCandidate(_GeminiFinishReason("STOP"), content=_GeminiContent(parts=[]))]
+    raw = _GeminiResponse(text="x", candidates=candidates)
     sdk = _FakeGeminiSDK(raw)
     client = GeminiLLMClient(api_key="x", model="m", client=sdk)
 

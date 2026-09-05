@@ -46,6 +46,7 @@ class PaymentRecord:
 class ReconciliationStatus(StrEnum):
     MATCHED = "matched"
     PENDING = "pending"
+    PENDING_RECONCILIATION = "pending_reconciliation"
     MISMATCH = "mismatch"
 
 

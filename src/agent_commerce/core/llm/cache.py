@@ -5,6 +5,7 @@ reaches the wrapped client, so it costs no rate-limit slot, no retry, and no bud
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from dataclasses import asdict
@@ -16,13 +17,38 @@ from agent_commerce.core.json_canonical import canonical_json
 from .types import LLMResponse, Message, ToolCall, ToolChoice, ToolSpec
 
 _DEFAULT_CACHE_DIR = Path(".cache/llm")
+_BYTES_MARKER = "__bytes_b64__"
+
+
+def _encode_bytes(value: Any) -> Any:
+    """Recursively replaces bytes with a marked, base64-encoded form so a ToolCall's
+    provider_metadata (e.g. Gemini's raw thought_signature) survives a round trip through
+    JSON, which has no native bytes type.
+    """
+    if isinstance(value, bytes):
+        return {_BYTES_MARKER: base64.b64encode(value).decode("ascii")}
+    if isinstance(value, dict):
+        return {k: _encode_bytes(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_encode_bytes(v) for v in value]
+    return value
+
+
+def _decode_bytes(value: Any) -> Any:
+    if isinstance(value, dict):
+        if value.keys() == {_BYTES_MARKER}:
+            return base64.b64decode(value[_BYTES_MARKER])
+        return {k: _decode_bytes(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_decode_bytes(v) for v in value]
+    return value
 
 
 def _message_to_dict(m: Message) -> dict:
     return {
         "role": m.role,
         "content": m.content,
-        "tool_calls": [asdict(tc) for tc in m.tool_calls],
+        "tool_calls": [_encode_bytes(asdict(tc)) for tc in m.tool_calls],
         "tool_call_id": m.tool_call_id,
         "tool_name": m.tool_name,
     }
@@ -83,7 +109,7 @@ class CachingLLMClient:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
             return LLMResponse(
                 text=cached["text"],
-                tool_calls=[ToolCall(**tc) for tc in cached["tool_calls"]],
+                tool_calls=[ToolCall(**_decode_bytes(tc)) for tc in cached["tool_calls"]],
                 stop_reason=cached["stop_reason"],
                 usage=cached["usage"],
                 provider=cached["provider"],
@@ -103,7 +129,7 @@ class CachingLLMClient:
             json.dumps(
                 {
                     "text": response.text,
-                    "tool_calls": [asdict(tc) for tc in response.tool_calls],
+                    "tool_calls": [_encode_bytes(asdict(tc)) for tc in response.tool_calls],
                     "stop_reason": response.stop_reason,
                     "usage": response.usage,
                     "provider": response.provider,

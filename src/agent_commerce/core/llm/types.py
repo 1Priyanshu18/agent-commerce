@@ -22,6 +22,11 @@ class ToolCall:
     id: str
     name: str
     arguments: dict
+    # Opaque, provider-specific round-trip data (e.g. Gemini's thought_signature, which its API
+    # requires to be echoed back verbatim on the next turn for multi-turn tool use). Only the
+    # adapter that set it ever reads it back; every other adapter and all orchestrator code
+    # ignores it.
+    provider_metadata: dict | None = None
 
 
 @dataclass(frozen=True)

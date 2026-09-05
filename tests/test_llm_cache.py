@@ -1,6 +1,6 @@
 from agent_commerce.core.llm.cache import CachingLLMClient
 from agent_commerce.core.llm.fake import FakeLLMClient, text_response, tool_response
-from agent_commerce.core.llm.types import Message, ToolChoice, ToolSpec
+from agent_commerce.core.llm.types import LLMResponse, Message, ToolCall, ToolChoice, ToolSpec
 
 
 def test_identical_request_hits_cache_and_skips_the_wrapped_client(tmp_path) -> None:
@@ -116,6 +116,36 @@ def test_tool_call_response_round_trips_through_cache(tmp_path) -> None:
     assert r1.tool_calls[0].name == "my_tool"
     assert r2.tool_calls[0].arguments == {"a": 1, "b": "x"}
     assert r2.cached is True
+
+
+def test_tool_call_provider_metadata_bytes_round_trip_through_cache(tmp_path) -> None:
+    # Gemini's thought_signature is raw bytes, stashed on ToolCall.provider_metadata — JSON has
+    # no native bytes type, so this must not crash the cache write, and must come back as the
+    # exact same bytes (not, say, a base64 string) on a cache hit.
+    response = LLMResponse(
+        text="",
+        tool_calls=[
+            ToolCall(
+                id="fc_1",
+                name="my_tool",
+                arguments={"a": 1},
+                provider_metadata={"thought_signature": b"\x00\x01\xffopaque"},
+            )
+        ],
+        stop_reason="tool_use",
+        usage={"input_tokens": 1, "output_tokens": 1},
+        provider="fake",
+        model="fake-model",
+    )
+    fake = FakeLLMClient([response])
+    cached = CachingLLMClient(fake, cache_dir=tmp_path)
+
+    r1 = cached.complete(system="sys", messages=[Message(role="user", content="hi")])
+    r2 = cached.complete(system="sys", messages=[Message(role="user", content="hi")])
+
+    assert r1.cached is False
+    assert r2.cached is True
+    assert r2.tool_calls[0].provider_metadata == {"thought_signature": b"\x00\x01\xffopaque"}
 
 
 def test_cache_persists_across_client_instances(tmp_path) -> None:

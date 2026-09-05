@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .models import Product
@@ -30,8 +30,10 @@ class SearchQuery:
 class CatalogStore:
     """In-memory product catalog, seeded from a static fixture file for reproducibility.
 
-    Read-only by design in this phase: stock is checked here but only decremented by the
-    checkout flow (added later), so a "select" never reserves inventory.
+    Stock is mutable only via set_stock() — a narrow escape hatch for the checkout-time stock
+    check (orchestrator/run_session.py) and for reproducing the stock_conflict failure path on
+    demand (Phase 7). Every other field stays effectively immutable: nothing else about a
+    product changes after boot.
     """
 
     def __init__(self, fixture_path: Path | str = _DEFAULT_FIXTURE) -> None:
@@ -41,6 +43,12 @@ class CatalogStore:
 
     def get(self, sku: str) -> Product | None:
         return self._products.get(sku)
+
+    def set_stock(self, sku: str, stock: int) -> None:
+        product = self._products.get(sku)
+        if product is None:
+            raise ValueError(f"unknown SKU: {sku}")
+        self._products[sku] = replace(product, stock=stock)
 
     def all(self) -> list[Product]:
         return list(self._products.values())

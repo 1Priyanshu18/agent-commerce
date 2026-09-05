@@ -36,6 +36,15 @@ class SimulatedPaymentAdapter:
         self._order_store = order_store
         self._clock = clock or SystemClock()
         self._payments: dict[str, list[PaymentRecord]] = {}
+        self._suppress_webhook_for: set[str] = set()
+
+    def suppress_webhook(self, transaction_id: str) -> None:
+        """Test/demo-only: makes the next create_order() for this transaction record the
+        payment as captured (a fresh fetch_payments() genuinely reflects it) but skip
+        delivering the webhook — reproducing "payment succeeded, our webhook got lost" on
+        demand for the missing_webhook failure path (Phase 7). Never called by normal code.
+        """
+        self._suppress_webhook_for.add(transaction_id)
 
     def create_order(
         self, *, transaction_id: str, amount_paise: int, policy_version: str, attempt_no: int = 1
@@ -72,7 +81,10 @@ class SimulatedPaymentAdapter:
         )
         self._payments.setdefault(order_id, []).append(payment)
 
-        self._deliver_webhook(order=order, payment=payment, notes=notes)
+        if transaction_id in self._suppress_webhook_for:
+            self._suppress_webhook_for.discard(transaction_id)
+        else:
+            self._deliver_webhook(order=order, payment=payment, notes=notes)
 
         return order
 

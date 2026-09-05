@@ -29,6 +29,7 @@ def _config(tmp_path) -> Config:
         razorpay_key_secret="",
         razorpay_webhook_secret=SECRET,
         reconcile_poll_interval_seconds=30,
+        pending_reconciliation_threshold_seconds=30,
         data_dir=str(tmp_path),
     )
 

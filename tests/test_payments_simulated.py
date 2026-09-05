@@ -12,7 +12,11 @@ def _adapter(tmp_path) -> tuple[SimulatedPaymentAdapter, WebhookStore, LedgerSto
     store = WebhookStore(tmp_path / "webhooks.db")
     ledger = LedgerStore(tmp_path / "ledger.db")
     order_store = OrderStore(tmp_path / "orders.db")
-    handler = WebhookHandler(webhook_secret=SECRET, store=store, ledger=ledger)
+    # Explicit no-op: these tests exercise the adapter's own lifecycle, not reconciliation —
+    # an intentional opt-out, not an accidental omission.
+    handler = WebhookHandler(
+        webhook_secret=SECRET, store=store, ledger=ledger, on_new_webhook=lambda order_id: None
+    )
     adapter = SimulatedPaymentAdapter(webhook_secret=SECRET, webhook_handler=handler, order_store=order_store)
     return adapter, store, ledger
 

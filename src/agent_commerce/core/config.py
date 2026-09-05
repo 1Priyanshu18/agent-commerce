@@ -26,6 +26,7 @@ class Config:
     razorpay_key_secret: str
     razorpay_webhook_secret: str
     reconcile_poll_interval_seconds: int
+    pending_reconciliation_threshold_seconds: int
     data_dir: str
 
 
@@ -34,11 +35,11 @@ def load_config() -> Config:
     return Config(
         app_env=os.environ.get("APP_ENV", "development"),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
-        llm_provider=os.environ.get("LLM_PROVIDER", "gemini"),
+        llm_provider=os.environ.get("LLM_PROVIDER", "groq"),
         gemini_api_key=os.environ.get("GEMINI_API_KEY", ""),
         gemini_model=os.environ.get("GEMINI_MODEL", "gemini-3.6-flash"),
         groq_api_key=os.environ.get("GROQ_API_KEY", ""),
-        groq_model=os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        groq_model=os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b"),
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
         anthropic_model=os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
         llm_max_calls_per_run=int(os.environ.get("LLM_MAX_CALLS_PER_RUN", "200")),
@@ -47,5 +48,8 @@ def load_config() -> Config:
         razorpay_key_secret=os.environ.get("RAZORPAY_KEY_SECRET", ""),
         razorpay_webhook_secret=os.environ.get("RAZORPAY_WEBHOOK_SECRET", ""),
         reconcile_poll_interval_seconds=int(os.environ.get("RECONCILE_POLL_INTERVAL_SECONDS", "30")),
+        pending_reconciliation_threshold_seconds=int(
+            os.environ.get("PENDING_RECONCILIATION_THRESHOLD_SECONDS", "30")
+        ),
         data_dir=os.environ.get("DATA_DIR", "data"),
     )
