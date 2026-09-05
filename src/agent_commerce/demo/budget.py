@@ -1,9 +1,6 @@
-"""Persistent daily call-budget tracker for the Streamlit demo app's Live run tab (Phase 9,
-docs/PHASE_9_SPEC.md) — the deployed Space is public and this exists to cap what it can spend
-of the owner's own LLM quota per day, across restarts (Streamlit's own session_state resets
-per browser session, so the counter has to live on disk, not in memory).
-
-Pure logic, no Streamlit import.
+"""Persistent daily call-budget tracker for the Live run tab, caching the deployed app's own
+LLM spend across restarts. Streamlit's session_state resets per browser session, so this
+lives on disk instead. Pure logic, no Streamlit import.
 """
 
 from __future__ import annotations
@@ -39,9 +36,7 @@ class DailyBudgetTracker:
         except (json.JSONDecodeError, OSError):
             return fresh
         state = BudgetState(date=data.get("date", ""), calls_used=data.get("calls_used", 0))
-        # A new day resets the counter — this is a rolling calendar-day budget, not a
-        # cumulative one.
-        return state if state.date == fresh.date else fresh
+        return state if state.date == fresh.date else fresh  # a new day resets the counter
 
     def _save(self, state: BudgetState) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

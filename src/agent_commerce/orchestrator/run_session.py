@@ -2,16 +2,13 @@
 MCP server, gating cart.add and checkout.confirm through the policy engine before they're
 allowed to execute, and calling the payment layer on a successful checkout.
 
-This is the only module in the codebase that calls policy/ and payments/ — the buyer agent
-only ever proposes tool calls; this runner decides whether they're allowed to happen.
+This is the only module that calls policy/ and payments/. The buyer agent only proposes
+tool calls; this runner decides whether they're allowed to happen.
 
-Phase 7 adds four reproducible failure paths via inject_failure (explicit .run() parameter,
-falling back to the INJECT_FAILURE env var — explicit always wins). Three of them
-(stock_conflict, policy_deny_recovery, and the natural DENY case that isn't injected at all)
-are recoverable: the gate is not treated as terminal, so the tool_result (with its
-human-readable reason) goes back to the agent and the loop keeps going, giving it a real
-chance to adapt rather than ending the session outright. payment_failure is different — it's
-an orchestrator-level bounded retry, not something the agent needs to react to.
+inject_failure (explicit .run() parameter, falling back to the INJECT_FAILURE env var)
+reproduces four failure paths. stock_conflict, policy_deny_recovery, and a natural DENY
+are recoverable: the gate result goes back to the agent and the loop continues instead of
+ending the session. payment_failure is an orchestrator-level bounded retry instead.
 """
 
 from __future__ import annotations
@@ -43,15 +40,11 @@ from agent_commerce.policy.service import PolicyService
 from .negotiation import resolve_small_gap
 from .session import SessionRegistry
 
-# 8 was enough for the happy path alone (search, add, checkout ≈ 3-4 turns); recovering from
-# an injected failure needs turns on top of that (fail, remove, search/add, retry ≈ 3-4 more),
-# so this was raised to 12 to give recovery genuine room. Deliberately NOT raised further:
-# repeated live Groq runs showed a model that sometimes never converges within any reasonable
-# turn count — searching indefinitely, or stacking a second item on top instead of removing
-# the first (see docs/PROGRESS.md, "policy_deny_recovery live convergence" — this is the
-# AgenticPay non-convergence finding surfacing in this system, not a bug to engineer around by
-# repeatedly enlarging the budget). turn_limit_reached is a legitimate, expected outcome for a
-# non-converging agent; Phase 8 measures its rate rather than this constant chasing it away.
+# The happy path takes about 3-4 turns; recovering from an injected failure needs roughly
+# that many again, hence 12. Not raised further: live runs show some agents never converge
+# regardless of turn budget (searching indefinitely, or stacking a second item instead of
+# removing the first), so turn_limit_reached is treated as a legitimate outcome to measure,
+# not a bug to chase away by enlarging this constant.
 MAX_TOOL_LOOP_TURNS = 12
 MAX_PAYMENT_RETRIES = 1
 _MAX_PAYMENT_ATTEMPTS = MAX_PAYMENT_RETRIES + 1
@@ -78,11 +71,9 @@ class SessionResult:
     turns_used: int
     denial_reason: str | None = None
     injected_failure: str | None = None
-    # Every non-empty assistant response.text across the main tool-loop turns, in order — not
-    # logged to the ledger anywhere else (only structured tool results are). Exists for
-    # analyses that need the agent's own raw reasoning text, e.g. the Phase 8 prompt-injection
-    # suite checking whether the agent's language shows it complying with an injected
-    # instruction, independent of whether any tool call actually carried it out.
+    # Every non-empty assistant response.text across the main tool-loop turns, in order —
+    # not logged to the ledger elsewhere. Lets analysis check the agent's raw reasoning
+    # independent of what any tool call actually did.
     assistant_texts: list[str] = field(default_factory=list)
 
 
@@ -269,12 +260,10 @@ class BuyerSessionRunner:
     async def _maybe_run_upsell(
         self, *, transaction_id: str, constraints: BuyerConstraints, upsell_state: dict[str, Any]
     ) -> None:
-        """At most once per session (Phase 8 grid dimension): after the first successful
-        cart.add, let the configured upsell strategy decide whether to offer a complementary
-        item, and if so, run the buyer's ACCEPT/DECLINE/COUNTER decision (a standalone LLM
-        call — see BuyerAgent.decide_on_offer — same pattern that method already used before
-        this was wired in) and the small-gap negotiation heuristic. Everything here is
-        reconstructible from the ledger afterward; nothing is added to SessionResult.
+        """At most once per session: after the first successful cart.add, let the configured
+        upsell strategy decide whether to offer a complementary item, then run the buyer's
+        ACCEPT/DECLINE/COUNTER decision and the small-gap negotiation heuristic. Everything
+        here is reconstructible from the ledger; nothing is added to SessionResult.
         """
         if self._upsell_strategy is None or upsell_state["attempted"]:
             return
@@ -323,11 +312,7 @@ class BuyerSessionRunner:
                 reasoning=decision.reasoning,
             )
         except Exception as e:  # noqa: BLE001 — a malformed side-decision must never crash
-            # the whole buying session; fail closed exactly like an unparseable response.
-            # Observed live: Groq's server-side tool-call validation can reject a response
-            # that omits a nullable field (counter_price_paise) entirely instead of sending it
-            # as null, raising before any response object exists for parse_buyer_decision to
-            # even see.
+            # the whole session; fail closed exactly like an unparseable response.
             buyer_decision, parse_method = None, f"error: {e}"
 
         if buyer_decision is None:
@@ -447,14 +432,9 @@ class BuyerSessionRunner:
         injection_state: dict[str, Any],
         upsell_state: dict[str, Any],
     ) -> tuple[dict, str]:
-        # The orchestrator owns which transaction this session is — never the agent's guess.
-        # A real LLM has no way to know the session's real transaction_id unless told, and
-        # nothing currently tells it (the tool schema requires the field, but the initial
-        # prompt never states its value), so it fills in a plausible-looking string of its
-        # own. Left unnormalized, the real MCP tool call below would mutate a *different*
-        # cart than the one every check in this method reads, silently splitting session
-        # state in two. Overriding here makes the mismatch structurally impossible rather
-        # than something a better prompt has to prevent.
+        # The agent is never told the real transaction_id, so it invents one. Override it
+        # here rather than in the prompt, or the mismatch would silently split cart state
+        # between what this method checks and what the tool call mutates.
         tool_input = {**tool_input, "transaction_id": transaction_id}
 
         if tool_name == "cart.add":
@@ -550,12 +530,8 @@ class BuyerSessionRunner:
             if verdict.outcome == PolicyVerdict.DENY:
                 result: dict = {"error": "policy_denied", "human_reason": verdict.human_reason}
                 if verdict.machine_reason == "BUDGET_CEILING_EXCEEDED":
-                    # A generic "adapt to errors" instruction in the system prompt proved too
-                    # weak in practice (observed live: the agent repeatedly added a second item
-                    # on top instead of removing the first, making the total worse) — spelling
-                    # out the exact numbers and the required action right where the failure
-                    # happens is far more reliably followed than an instruction the model has
-                    # to recall from much earlier in a growing conversation.
+                    # A generic "adapt to errors" system-prompt instruction wasn't reliably
+                    # followed; spelling out the exact numbers and required action here is.
                     result["cart_total_paise"] = cart.total_paise
                     result["budget_ceiling_paise"] = effective_budget_ceiling_paise
                     result["hint"] = (

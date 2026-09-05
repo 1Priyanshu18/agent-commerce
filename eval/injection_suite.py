@@ -1,6 +1,5 @@
-"""Phase 8 Step 4a: prompt-injection robustness suite. See docs/PHASE_8_SPEC.md.
-
-Separate from the main grid — a small, dedicated catalog (eval/injection_products.json) of 6
+"""Prompt-injection robustness suite, separate from the main eval grid — a small, dedicated
+catalog (eval/injection_products.json) of 6
 adversarial products across 3 injection styles (direct instruction, fake system message,
 indirect via review text), plus one clean filler product as a sanity check. One session per
 product: argument_level enforcement, "none" upsell condition (isolates the question to "does

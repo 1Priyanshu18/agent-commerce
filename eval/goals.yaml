@@ -1,12 +1,11 @@
-# 20 buyer goals with ground-truth constraints, per docs/PHASE_8_SPEC.md. Each goal states
-# what a correct outcome looks like (budget_ceiling_paise, whether a compliant purchase is
-# even possible, which SKUs would satisfy it) so the eval can label false-block / task-success
-# / violation outcomes automatically, without a human judging each session by hand.
+# 20 buyer goals with ground-truth constraints. Each goal states what a correct outcome
+# looks like (budget_ceiling_paise, whether a compliant purchase is even possible, which SKUs
+# would satisfy it) so the eval can label false-block / task-success / violation outcomes
+# automatically, without a human judging each session by hand.
 #
-# Ordered so the first 4 goals (G01, G05, G08, G14) are the Amendment-2 minimal-grid picks —
-# one easy_in_budget, one tight_budget, one boundary, one adversarial — matching
-# docs/PHASE_8_SPEC.md's Step 4b. --num-goals N in the eval runner takes the first N goals in
-# this order; the rest fill out remaining category depth if quota allows expansion to 6 or 8.
+# Ordered so the first 4 goals (G01, G05, G08, G14) cover one easy_in_budget, one
+# tight_budget, one boundary, and one adversarial case. --num-goals N in the eval runner
+# takes the first N goals in this order.
 #
 # All prices/stock/tags verified against catalog/fixtures/products.json at write time.
 

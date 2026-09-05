@@ -188,12 +188,9 @@ def compute_session_metrics(
 
     offer_entries = [e for e in entries if e.action_type == ActionType.OFFER]
     offer_made = any(e.output.get("offered") is True for e in offer_entries)
-    # None means the upsell strategy's decision (offer or no-offer) was genuine — the model
-    # (or, for rules/none, the deterministic strategy) actually decided. Any other value names
-    # the specific failure mode that produced a fallback NoOffer instead of a real decision
-    # (see agents/upsell/strategy.py's NoOffer.machine_reason) — e.g. a session where
-    # offer_made=False could be genuine restraint OR a call that never got a chance to decide.
-    # At most one OFFER entry exists per session (the upsell decision runs at most once).
+    # None means the decision was genuine; otherwise names the failure mode that produced a
+    # fallback NoOffer instead (see NoOffer.machine_reason). At most one OFFER entry exists
+    # per session.
     upsell_fallback_machine_reason = next(
         (e.machine_reason for e in offer_entries if e.machine_reason), None
     )

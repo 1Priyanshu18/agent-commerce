@@ -259,9 +259,8 @@ def test_llm_call_raising_records_a_distinct_machine_reason(make_catalog) -> Non
 
 
 def test_genuine_no_offer_decision_has_no_machine_reason(make_catalog) -> None:
-    # machine_reason is None only for a genuine, successfully-parsed model decision — this
-    # is what lets the ledger distinguish "model declined" from "call failed and we fell
-    # back to decline" (see docs/PROGRESS.md).
+    # machine_reason is None only for a genuine, successfully-parsed model decision, which
+    # is what lets the ledger distinguish a real decline from a fallback to decline.
     catalog = make_catalog(_PRODUCTS)
     llm = FakeLLMClient(
         [

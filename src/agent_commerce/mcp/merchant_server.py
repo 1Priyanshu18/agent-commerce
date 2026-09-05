@@ -72,10 +72,6 @@ def build_merchant_server(
         if not reasoning.strip():
             raise ValueError("reasoning is required even when declining to make an offer")
 
-        # machine_reason is None for a genuine model decision to decline, and a distinct
-        # string (e.g. "UPSELL_DECISION_CALL_FAILED") when this NoOffer is itself a fallback
-        # from some failure — see agents/upsell/strategy.py's NoOffer.machine_reason. Without
-        # this, a silent fallback and a real decline write an identical ledger entry.
         entry = ledger.append(
             transaction_id=transaction_id,
             caused_by=_caused_by(transaction_id),

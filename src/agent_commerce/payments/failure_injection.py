@@ -1,8 +1,8 @@
 """Test/demo-only wrapper that can make the FIRST create_order() call for a specific
-transaction fail with a retryable error, so the payment_failure failure path (Phase 7) is
-reproducible on demand instead of depending on a real network blip. Never used by
-build_payment_stack() or any production code path — the orchestrator applies this itself,
-only when a session asks for it (BuyerSessionRunner.run(inject_failure="payment_failure")).
+transaction fail with a retryable error, so the payment_failure path is reproducible on
+demand instead of depending on a real network blip. Never used by build_payment_stack() —
+the orchestrator applies this itself, only when a session asks for it
+(BuyerSessionRunner.run(inject_failure="payment_failure")).
 
 Sits outside the idempotent/recording wrapping (build_payment_stack()'s composed adapter is
 what gets wrapped here), so an injected failure never reaches the idempotency store — nothing

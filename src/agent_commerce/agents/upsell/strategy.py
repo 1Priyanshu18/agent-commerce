@@ -35,12 +35,9 @@ class Offer:
 @dataclass(frozen=True)
 class NoOffer:
     reasoning: str
-    # None means the strategy genuinely decided not to offer and said so. Any other value
-    # names a distinct failure mode that fell back to NoOffer rather than a real decision —
-    # e.g. "UPSELL_DECISION_CALL_FAILED" when the LLM call itself failed before a response
-    # existed to parse. Without this, a silent fallback and a genuine decline are
-    # indistinguishable in the ledger (see docs/PROGRESS.md, "a silent-degradation
-    # explainability gap").
+    # None means a genuine decision. Any other value names the failure mode that produced
+    # this NoOffer instead, e.g. "UPSELL_DECISION_CALL_FAILED" — otherwise a fallback and a
+    # genuine decline are indistinguishable in the ledger.
     machine_reason: str | None = None
 
 

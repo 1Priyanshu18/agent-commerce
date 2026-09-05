@@ -1,7 +1,5 @@
-"""Streamlit demo app for Agent Commerce. A thin view layer only — see
-docs/PHASE_9_SPEC.md. All logic (policy, ledger, payments, the eval grid) lives in
-agent_commerce/ and eval/; nothing under src/ imports Streamlit, and this file computes
-nothing the package doesn't already compute.
+"""Streamlit demo app. A thin view layer: all logic lives in agent_commerce/ and eval/,
+and nothing under src/ imports Streamlit.
 """
 
 from __future__ import annotations
@@ -51,12 +49,8 @@ REPORT_PATH = REPO_ROOT / "eval" / "report.md"
 MARGIN_PLOT_PATH = REPO_ROOT / "eval" / "plot_margin_uplift.png"
 SCATTER_PLOT_PATH = REPO_ROOT / "eval" / "plot_false_block_vs_prevention.png"
 
-# Streamlit's `:color[text]` markdown directive only recognizes a fixed palette (red, orange,
-# yellow, green, blue, violet, gray/grey, rainbow, primary) — "teal" isn't one of them, and an
-# unrecognized color name breaks the directive's parsing (the bracketed content vanishes rather
-# than falling back to plain text). "violet" is the closest valid palette color to the
-# originally-intended teal, and is used here instead of a color already claimed by
-# VERDICT_COLOR below (blue=TRANSFORM) to avoid the two chips ever looking identical.
+# Streamlit's :color[] directive only supports a fixed palette; "teal" isn't in it and
+# silently breaks. "violet" stands in, kept distinct from VERDICT_COLOR's "blue".
 ACTOR_COLOR = {
     Actor.BUYER_AGENT: "violet",
     Actor.UPSELL_AGENT: "violet",
@@ -71,89 +65,10 @@ VERDICT_COLOR = {
     PolicyVerdict.DENY: "red",
 }
 
-ARCHITECTURE_DIAGRAM = """\
-+-------------------+          +----------------------+
-|   Buyer Agent      |          |   Upsell Agent        |
-|   (LLM, tool use)   |          |   (llm / rules / none)|
-+---------+-----------+          +-----------+----------+
-          | catalog.search, cart.add,        | cart.read_at_checkout,
-          | cart.remove, checkout.confirm    | upsell.make_offer, upsell.no_offer
-          v                                  v
-+---------------------+          +------------------------+
-|  Buyer MCP Server    |          |  Merchant MCP Server    |
-|  (buyer tools only)  |          |  (merchant tools only,  |
-|                      |          |   no cart-mutating tool)|
-+---------+------------+          +-----------+------------+
-          |                                   |
-          +-----------------+-----------------+
-                            |
-                            v
-                +--------------------------+
-                |   BuyerSessionRunner       |   <- the ONLY module that calls
-                |   (orchestrator)           |      policy/ and payments/ directly
-                +-------------+--------------+
-                              | every cart.add / checkout.confirm /
-                              | cart.accept_upsell goes through this gate first
-                              v
-                +--------------------------+
-                |   Policy Engine            |   ALLOW / DENY / TRANSFORM /
-                |   (policies/default.yaml)  |   REQUIRE_APPROVAL — deterministic,
-                |                            |   argument-level, never an LLM call
-                +-------------+--------------+
-                              | ALLOW (or TRANSFORM) only
-                              v
-                +--------------------------+
-                |   Payment Layer             |   Razorpay (live_test) / simulated,
-                |   (idempotent, recorded)    |   same interface either way
-                +-------------+--------------+
-                              v
-                +--------------------------+
-                |   Hash-chained Ledger      |   every action, caused_by-linked,
-                |                            |   append-only, verify_chain()
-                +--------------------------+
-
-Neither MCP server exposes policy.* or payment.* as a tool — an LLM can never call the thing
-that authorizes it or the thing that moves money. Role separation is enforced twice:
-structurally (each server only ever registers its own role's tools) and via a defense-in-depth
-authorize() check inside every tool handler.
-"""
-
-TRISM_PROSE = """\
-**Explainability.** Every action — search, cart mutation, policy check, payment call,
-webhook, reconciliation — is written to the ledger with a `reasoning_summary` and, where a
-gate fired, a `human_reason` a non-technical reader can follow. Every entry links to the
-entries that caused it (`caused_by`), so a session is a traceable provenance chain, not a flat
-log. `verify_chain()` recomputes every hash and reports the real result — never hardcoded.
-
-**Application Security.** The policy engine evaluates real argument values (cart totals,
-discount percentages, SKUs) at the moment a tool is about to execute — not just which tool was
-called. Role separation is structural (the buyer and merchant LLMs each see only their own
-tool surface) and defense-in-depth (`authorize()` re-checks and logs a `role_violation` on any
-mismatch). The gate never trusts anything the agent merely *says* — it only acts on catalog
-and cart state it reads itself, which is why a prompt injection embedded in a product
-description can talk to the agent but never talks to the gate.
-
-**Governance.** The ledger is append-only, enforced by database triggers, not just
-application code. High-value checkouts route to `REQUIRE_APPROVAL`, which fails closed
-(auto-denies) on timeout rather than sitting open indefinitely. The `transaction_id` that
-provenance is keyed on is orchestrator-owned, never agent-supplied — an agent that could pick
-its own audit-trail key would undermine the audit trail itself.
-"""
-
-
-# --- Cached resources / data -----------------------------------------------------------
-
-
 @st.cache_resource
 def get_demo_ledger() -> LedgerStore:
-    # read_only=True: this file is committed, curated, and never written to by the running
-    # app — opening it read-only means it works even on a read-only app directory (HF Spaces).
+    # read_only so this works even if the app's filesystem is read-only.
     return LedgerStore(DEMO_LEDGER_PATH, read_only=True)
-
-
-@st.cache_resource
-def get_compiled_policy():
-    return compile_policy(POLICY_PATH)
 
 
 @st.cache_data
@@ -193,9 +108,6 @@ def _model_for(config: Config) -> str:
     }.get(config.llm_provider, "unknown")
 
 
-# --- Tab 1: Live run ---------------------------------------------------------------------
-
-
 def _run_live_session(config: Config, goal_text: str, inject_failure: str | None) -> tuple:
     catalog = CatalogStore()
     ledger = LedgerStore(":memory:")
@@ -214,7 +126,7 @@ def _run_live_session(config: Config, goal_text: str, inject_failure: str | None
 
     with tempfile.TemporaryDirectory() as tmp:
         payment_stack = build_payment_stack(config, ledger=ledger, data_dir=Path(tmp))
-        # The demo's own hard per-session call cap, never looser than the app-wide one.
+        # Take the tighter of the demo's per-session cap and the app-wide one.
         capped_config = replace(
             config, llm_max_calls_per_run=min(config.llm_max_calls_per_run, config.demo_max_calls_per_session)
         )
@@ -288,14 +200,11 @@ def render_live_run_tab(config: Config) -> None:
 
         verification = ledger.verify_chain()
         if verification.ok:
-            st.success(f"Ledger integrity ✓ ({verification.entries_checked} entries)")
+            st.success(f"Ledger integrity verified ({verification.entries_checked} entries)")
         else:
             st.error(f"Ledger integrity FAILED: {verification.error}")
     elif not can_run:
         st.caption("Enter the correct passphrase to enable the run button.")
-
-
-# --- Tab 2: Session replay -----------------------------------------------------------------
 
 
 def render_ledger_entry(entry: LedgerEntry) -> None:
@@ -333,7 +242,7 @@ def render_session_replay_tab() -> None:
     selected = st.selectbox("Session", transaction_ids)
     verification = ledger.verify_chain()
     if verification.ok:
-        st.success(f"Ledger integrity ✓ ({verification.entries_checked} entries checked)")
+        st.success(f"Ledger integrity verified ({verification.entries_checked} entries checked)")
     else:
         st.error(f"Ledger integrity FAILED at entry {verification.entries_checked}: {verification.error}")
 
@@ -350,9 +259,6 @@ def render_session_replay_tab() -> None:
         "empty for the committed demo data. A live run (Live run tab) that exceeds the "
         "high-value threshold will populate it for that session."
     )
-
-
-# --- Tab 3: Eval ---------------------------------------------------------------------------
 
 
 def render_eval_tab() -> None:
@@ -428,22 +334,15 @@ def render_eval_tab() -> None:
         st.caption("No injection suite results found — run `python -m eval.injection_suite`.")
 
 
-# --- Tab 4: Architecture ---------------------------------------------------------------------
-
-
-def render_architecture_tab() -> None:
-    st.subheader("System architecture")
-    st.code(ARCHITECTURE_DIAGRAM, language=None)
-
-    st.subheader("Policy DSL (live from policies/default.yaml)")
-    get_compiled_policy()  # exercised here only to prove the file compiles; not rendered raw twice
-    st.code(POLICY_PATH.read_text(encoding="utf-8"), language="yaml")
-
-    st.subheader("TRiSM pillars")
-    st.markdown(TRISM_PROSE)
-
-
-# --- Entry point -----------------------------------------------------------------------------
+def _bridge_secrets_into_environ() -> None:
+    # Streamlit Cloud secrets live in st.secrets, not os.environ, but Config reads
+    # os.environ. Streamlit copies secrets into os.environ the first time st.secrets is
+    # parsed, so touching it once here is enough. Raises if there's no secrets.toml
+    # (plain local dev via .env), which is fine to ignore.
+    try:
+        len(st.secrets)
+    except Exception:
+        pass
 
 
 def main() -> None:
@@ -451,17 +350,16 @@ def main() -> None:
     st.title("Agent Commerce — constraint-based agentic commerce")
     st.caption("Razorpay AI Buildathon, Track 01")
 
+    _bridge_secrets_into_environ()
     config = load_config()
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Live run", "Session replay", "Eval", "Architecture"])
+    tab1, tab2, tab3 = st.tabs(["Live run", "Session replay", "Eval"])
     with tab1:
         render_live_run_tab(config)
     with tab2:
         render_session_replay_tab()
     with tab3:
         render_eval_tab()
-    with tab4:
-        render_architecture_tab()
 
 
 main()

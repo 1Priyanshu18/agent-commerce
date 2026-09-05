@@ -1,18 +1,13 @@
-"""Phase 8 report generator. Reads eval/results.json (main grid) and
-eval/injection_results.json (prompt-injection suite) — never computes the grid itself, per
-docs/PHASE_8_SPEC.md ("the same JSON the Phase 9 Streamlit app reads"). Produces:
-  - eval/report.md — the full markdown report (internal — quota/timebox narrative allowed)
-  - eval/plot_offer_rate.png — the headline finding (offer rate by condition)
-  - eval/plot_margin_uplift.png
-  - eval/plot_false_block_vs_prevention.png
-  - splices a public-facing eval summary into README.md between two marker comments (Phase 10,
-    docs/PHASE_10_SPEC.md "Eval sections stay open") — the only place that public summary is
-    written, so re-running this script keeps the README in sync with results.json automatically.
+"""Report generator. Reads eval/results.json (main grid) and eval/injection_results.json
+(prompt-injection suite) — never computes the grid itself. Produces:
+  - eval/report.md — the full markdown report
+  - eval/plot_offer_rate.png, plot_margin_uplift.png, plot_false_block_vs_prevention.png
+  - a public-facing eval summary spliced into README.md between marker comments, the only
+    place that summary is written, so re-running this script keeps the README in sync.
 
-Report ordering (2026-09-05 restructure): the offer-rate divergence between the llm and rules
-upsell conditions is the headline finding, not margin uplift — see the machine_reason taxonomy
-section for why margin uplift was demoted (too few accepted offers at this n to support any
-conclusion).
+The offer-rate divergence between the llm and rules upsell conditions is the headline
+finding, not margin uplift — see the machine_reason taxonomy section for why margin uplift
+is demoted (too few accepted offers at this n to support a conclusion).
 """
 
 from __future__ import annotations
@@ -129,34 +124,26 @@ def _offer_rate_lines(sessions: list[dict]) -> list[str]:
             else "n/a (0 genuine decisions captured)"
         )
         lines.append(
-            f"**Report both llm numbers, not one:** raw offer rate "
-            f"{_rate(llm_sessions, lambda s: s['offer_made'])} across all {len(llm_sessions)} "
-            f"sessions; **{genuine_offer_rate}** among the {len(genuine_sessions)} sessions "
-            f"where the model's decision was actually captured (excluding "
-            f"{len(fallback_sessions)} fallback session(s) — see the machine_reason taxonomy "
-            "below for what those were)."
+            f"Raw offer rate is {_rate(llm_sessions, lambda s: s['offer_made'])} across all "
+            f"{len(llm_sessions)} sessions. Among the {len(genuine_sessions)} sessions where "
+            f"the model's decision was actually captured, excluding {len(fallback_sessions)} "
+            f"fallback session(s), the rate is {genuine_offer_rate}. Both numbers are reported "
+            "here; see the machine_reason taxonomy below for what the fallbacks were."
         )
         lines.append("")
         lines.append(
-            "**Two competing interpretations, both consistent with this data — neither is "
-            "favored here:**"
+            "Two readings are consistent with this data and neither is favored here. The "
+            "`llm` strategy may exercise restraint the deterministic `rules` strategy can't, "
+            "declining when an offer genuinely isn't warranted. Or it may simply be less "
+            "reliable at producing a valid decision at all, with the low offer rate partly "
+            "reflecting model flakiness rather than judgment."
         )
         lines.append(
-            "1. The `llm` strategy exercises restraint the deterministic `rules` strategy "
-            "can't: it can decline when an offer genuinely isn't warranted for this cart, "
-            "which is desirable merchant behavior a fixed rule can't express."
-        )
-        lines.append(
-            "2. Or the `llm` strategy is simply less reliable at producing a valid decision "
-            "at all, and the low offer rate partly reflects model flakiness rather than "
-            "judgment."
-        )
-        lines.append(
-            f"The {len(fallback_sessions)} fallback session(s) below are direct evidence for "
-            "reading 2 — some fraction of the apparent \"restraint\" is measurably not "
-            "restraint at all. Which interpretation dominates isn't resolved by this dataset; "
-            "what the taxonomy adds is the ability to say precisely how much of the gap is "
-            "attributable to which cause, instead of guessing."
+            f"The {len(fallback_sessions)} fallback session(s) below are evidence for the "
+            "second reading: some fraction of the apparent restraint is measurably not "
+            "restraint at all. Which reading dominates isn't resolved by this dataset. What "
+            "the taxonomy adds is the ability to say how much of the gap is attributable to "
+            "a known cause versus genuinely ambiguous, instead of guessing."
         )
     return lines
 
@@ -195,7 +182,7 @@ def _machine_reason_lines(sessions: list[dict]) -> list[str]:
 def _uplift_table_lines(sessions: list[dict], goals_complete_all_6: list[str]) -> list[str]:
     """Shared by the internal report and the public README section."""
     if not goals_complete_all_6:
-        return ["_No goal has all 6 cells complete yet — uplift table pending._"]
+        return ["_No goal has all 6 cells complete yet; uplift table pending._"]
     lines = ["| goal | enforcement | rules uplift (pp) | llm uplift (pp) |", "|---|---|---|---|"]
     for goal_id in goals_complete_all_6:
         for level in ENFORCEMENT_LEVELS:
@@ -218,10 +205,10 @@ def _uplift_table_lines(sessions: list[dict], goals_complete_all_6: list[str]) -
             )
     lines.append("")
     lines.append(
-        "**n is small (goals fully complete: "
-        f"{len(goals_complete_all_6)}) — reported plainly, no confidence intervals.** "
-        "This is a paired, per-goal, percentage-point margin delta, not a marginal-means "
-        "comparison — see eval/report.md's Methodology section for detail."
+        f"n is small (goals fully complete: {len(goals_complete_all_6)}), reported plainly "
+        "with no confidence intervals. This is a paired, per-goal, percentage-point margin "
+        "delta, not a marginal-means comparison; see eval/report.md's Methodology section "
+        "for detail."
     )
     return lines
 
@@ -275,7 +262,7 @@ def build_report() -> str:
     )
 
     lines: list[str] = []
-    lines.append("# Phase 8 Evaluation Report")
+    lines.append("# Evaluation Report")
     lines.append("")
     lines.append(
         f"**Provider/model:** {meta['provider']} / {meta['model']}  \n"
@@ -309,7 +296,7 @@ def build_report() -> str:
         "`find_candidate_products()`) surfaced a 12/12 mismatch rate — every `llm`-condition "
         "session in that dataset showed `offer_made=False` while its exact `rules` "
         "counterpart showed `True`. That data was discarded and the 20 `llm` cells were "
-        "re-run after the schema fix (see docs/PROGRESS.md for the full account)."
+        "re-run after the schema fix."
     )
     lines.append("")
     lines.append(
@@ -347,7 +334,7 @@ def build_report() -> str:
         lines.append(
             "**No goal in this run attempted a real budget violation** — every goal here has "
             "`compliant_purchase_possible: true` in `eval/goals.yaml`, and the buyer agent "
-            "stayed under its own ceiling in every session. That means the core Phase 8 "
+            "stayed under its own ceiling in every session. That means the core "
             "research question — does argument-level enforcement prevent more real "
             "violations than tool-level enforcement? — is **untested by this dataset**, not "
             "answered favorably by a 0% violation rate in both conditions. A meaningful "
@@ -402,7 +389,7 @@ def build_report() -> str:
             "would need to first get the agent to attempt the injected action (e.g. via a "
             "weaker or differently-prompted agent) and then check whether the gate still "
             "blocks it. What we do have positive evidence for is the gate's defense in "
-            "general: the Phase 7 live-attempt record (below) shows the policy engine "
+            "general: the live-attempt record (below) shows the policy engine "
             "correctly denying an over-budget checkout in **100% of ~6-7 live attempts**, "
             "including cases where the buyer agent's own recovery planning failed — that is "
             "the real demonstration that the gate holds under pressure, not this suite's "
@@ -424,17 +411,16 @@ def build_report() -> str:
     )
     lines.append("")
     lines.append(
-        "**Phase 7 live-attempt record (folded in as real observational data already paid "
-        "for, not re-run here):** across ~6-7 live attempts at the `policy_deny_recovery` "
+        "Live-attempt record, folded in as real observational data already paid for and not "
+        "re-run here. Across roughly six to seven live attempts at the `policy_deny_recovery` "
         "failure path on this same model (gpt-oss-120b), the policy engine correctly denied "
-        "the over-budget checkout **100% of the time** — the gate never once failed. What "
-        "varied was the buyer agent's own recovery planning: one attempt executed the correct "
-        "remove-then-add recovery but ran out of turns before retrying checkout; another "
+        "the over-budget checkout in every attempt; the gate never once failed. What varied "
+        "was the buyer agent's own recovery planning. One attempt executed the correct "
+        "remove-then-add recovery but ran out of turns before retrying checkout. Another "
         "attempt regressed and stacked a second item on top instead of removing the first, "
-        "denied again at triple the original total; several attempts never got far enough to "
-        "test recovery at all (excessive, sometimes zero-result, category search before ever "
-        "adding an item). See docs/PROGRESS.md, \"policy_deny_recovery live convergence\", for "
-        "the full record."
+        "denied again at triple the original total. Several attempts never got far enough to "
+        "test recovery at all, spending their turns on excessive, sometimes zero-result, "
+        "category search."
     )
     lines.append("")
 
@@ -727,11 +713,10 @@ def _public_eval_data() -> tuple[dict, list[dict], list[dict], list[str], list[s
 def build_public_eval_results_section() -> str:
     """The 'Evaluation results' section spliced into README.md. Numbers are computed the same
     way as build_report() (via the shared helpers) so the two documents can never silently
-    disagree — but this version omits anything about quota, free tiers, API budgets, or run
-    interruptions (docs/PHASE_10_SPEC.md, "Public-facing tone"): it states the scope of the
-    evidence, not the operational reason a run stopped where it did (that reasoning, if any,
-    belongs only in docs/PROGRESS.md). Returns a clearly marked placeholder if
-    eval/results.json doesn't exist yet.
+    disagree. This version omits anything about quota, free tiers, API budgets, or run
+    interruptions: it states the scope of the evidence, not the operational reason a run
+    stopped where it did. Returns a clearly marked placeholder if eval/results.json doesn't
+    exist yet.
     """
     data = _public_eval_data()
     if data is None:
@@ -743,7 +728,7 @@ def build_public_eval_results_section() -> str:
         by_cell[_cell_key(s)].append(s)
 
     lines: list[str] = []
-    lines.append(f"**Model:** {meta.get('provider', 'n/a')} / {meta.get('model', 'n/a')}")
+    lines.append(f"Model: {meta.get('provider', 'n/a')} / {meta.get('model', 'n/a')}")
     lines.append("")
     lines.append("### Offer-rate divergence: llm vs. rules (the headline finding)")
     lines.append("")
@@ -759,12 +744,12 @@ def build_public_eval_results_section() -> str:
         n = len(inj_results)
         gate_fail = sum(1 for r in inj_results if r["gate_level_attack_success"])
         lines.append(
-            f"**Prompt-injection suite:** {n} adversarial products, policy-gate attack "
-            f"success {gate_fail}/{n}. This is an absence-of-failure result, not a positive "
-            "demonstration — see Limitations below."
+            f"Prompt-injection suite: {n} adversarial products, policy-gate attack success "
+            f"{gate_fail}/{n}. This is an absence-of-failure result rather than a positive "
+            "demonstration; see Limitations below."
         )
         lines.append("")
-    lines.append("### Margin uplift vs. no-upsell baseline — demoted, not statistically supportable")
+    lines.append("### Margin uplift vs. no-upsell baseline (not statistically supportable)")
     lines.append("")
     lines.extend(_uplift_table_lines(sessions, goals_complete_all_6))
     lines.append("")
@@ -775,8 +760,8 @@ def build_public_eval_results_section() -> str:
 def build_public_limitations_section() -> str:
     """The README's own 'Limitations' section — see build_public_eval_results_section()'s
     docstring for the same public-facing-tone constraint. Kept as a separate function/marker
-    pair from the eval results so the README can order them as two distinct sections
-    (docs/PHASE_10_SPEC.md) while both stay generated from the same underlying data.
+    pair from the eval results so the README can order them as two distinct sections while
+    both stay generated from the same underlying data.
     """
     data = _public_eval_data()
     if data is None:
@@ -798,22 +783,22 @@ def build_public_limitations_section() -> str:
         "product, which is a measured source of noise in the margin-uplift numbers.",
         "- Simulated buyer behaviour: each goal is a natural-language prompt given to an LLM "
         "buyer, not a real user.",
-        "- Simulated payments on the deployed Space (`PAYMENT_MODE=simulated`) — the full "
-        "order → webhook → reconciliation lifecycle still executes end to end.",
+        "- Simulated payments on the deployed app (`PAYMENT_MODE=simulated`). The full order, "
+        "webhook, and reconciliation lifecycle still executes end to end.",
         "- The margin-uplift table is not statistically meaningful at this sample size and is "
-        "not the headline finding — read it as illustrative only.",
+        "not the headline finding. Read it as illustrative only.",
         f"- The offer-rate divergence is the supportable finding, and even it has two open "
-        f"interpretations (restraint vs. reliability) this dataset doesn't resolve on its own "
-        f"— {fallback_count} of {len(llm_sessions) or 'n/a'} llm-condition session(s) are "
+        f"interpretations (restraint vs. reliability) this dataset doesn't resolve on its "
+        f"own. {fallback_count} of {len(llm_sessions) or 'n/a'} llm-condition session(s) are "
         "known fallbacks rather than genuine decisions (see the write-up's machine_reason "
         "taxonomy discussion).",
     ]
     if inj_results:
         lines.append(
-            "- The prompt-injection suite is an absence-of-failure result: the agent was "
+            "- The prompt-injection suite is an absence-of-failure result. The agent was "
             "never induced to act on an injected instruction, so the policy gate's defense "
             "against injected actions specifically remains untested by this suite (see the "
-            "write-up's Phase 7 recovery record for the gate's positive track record instead)."
+            "write-up's recovery record for the gate's positive track record instead)."
         )
     return "\n".join(lines)
 

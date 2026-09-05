@@ -1,5 +1,4 @@
-"""Phase 8 eval grid runner. See docs/PHASE_8_SPEC.md for the full spec and the tiered-plan
-amendment. Usage:
+"""Eval grid runner. Usage:
 
     python -m eval.runner --dry-run --tier A
     python -m eval.runner --tier A
@@ -52,8 +51,8 @@ CONDITIONS = ["none", "rules", "llm"]
 ENFORCEMENT_LEVELS = ["tool_level_only", "argument_level"]
 BLACKLIST_SKUS = frozenset({"SKU-0042"})
 
-# Measured, not guessed — from 103 real Groq calls during Phase 7's live demo runs (see
-# docs/PROGRESS.md). Used only for --dry-run's estimate; a real run reports real numbers.
+# Measured from 103 real Groq calls during earlier live demo runs, not guessed. Used only
+# for --dry-run's estimate; a real run reports real numbers.
 MEASURED_AVG_TOKENS_PER_CALL = 2558
 MEASURED_AVG_CALLS_PER_SESSION = 15
 
@@ -98,9 +97,8 @@ def _build_upsell_strategy(condition: str, catalog: CatalogStore, llm_client):
 
 def build_grid(num_goals: int, num_seeds: int) -> list[tuple[str, str, Goal, int]]:
     # goal, seed outermost: the 6 (condition, enforcement_level) cells for one (goal, seed)
-    # run back-to-back, so the shared buyer trajectory they have in common (see "trajectory
-    # replay" in docs/PHASE_8_SPEC.md) is still warm in the LLM response cache when the next
-    # cell needs it, and cache-hit/miss can be measured cleanly per goal.
+    # run back-to-back, so their shared buyer trajectory is still warm in the LLM response
+    # cache when the next cell needs it.
     goals = load_goals(limit=num_goals)
     return [
         (condition, enforcement_level, goal, seed)
@@ -202,7 +200,7 @@ def dry_run_report(num_goals: int, num_seeds: int) -> None:
     print(f"Estimated LLM calls: {total_calls} (~{MEASURED_AVG_CALLS_PER_SESSION}/session)")
     print(
         f"Estimated tokens: {total_tokens:,} (~{MEASURED_AVG_TOKENS_PER_CALL}/call, measured "
-        "from Phase 7 live Groq runs — cache hits on repeat cells cost nothing extra)"
+        "from live Groq runs — cache hits on repeat cells cost nothing extra)"
     )
     print(f"  vs Groq free-tier RPD=1,000: {total_calls / 1000:.2f} days needed")
     print(f"  vs Groq free-tier TPD=200,000: {total_tokens / 200_000:.2f} days needed")
@@ -251,10 +249,8 @@ async def main_async(args: SimpleNamespace) -> None:
                 data_dir=data_dir,
             )
         except (RetryableError, CallBudgetExceededError, FatalError) as e:
-            # A real, persistent provider-side failure (e.g. a 429 that survives every
-            # retry) must abort exactly as cleanly as the self-imposed token-budget check
-            # above — every completed cell up to this point is already checkpointed, so an
-            # interruption here should never look like a crash, just an early, resumable stop.
+            # Abort as cleanly as the token-budget check above — completed cells are already
+            # checkpointed, so this is a resumable stop, not a crash.
             print(
                 f"\nABORTING: {cell_id} failed with a real LLM-provider error "
                 f"({type(e).__name__}: {e}). Results so far are saved at {RESULTS_PATH} "

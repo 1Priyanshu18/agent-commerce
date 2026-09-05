@@ -21,16 +21,9 @@ from .webhook_store import WebhookRecord, WebhookStore
 
 
 class UnwiredReconciliationCallbackError(RuntimeError):
-    """A new webhook arrived that should trigger reconciliation, but on_new_webhook was never
-    wired. Composing the full payment stack has a genuine circular dependency (see
-    payments/__init__.py) that's broken by setting this callback after construction rather
-    than requiring it up front — which converts "reconciliation is wired" from a
-    construction-time guarantee into a runtime one. This exception is what keeps that runtime
-    gap loud: without it, a webhook would be stored and ledger-logged but reconciliation would
-    silently never fire, and the order would sit at "created" forever with no signal anything
-    is wrong. If a handler genuinely doesn't need reconciliation (e.g. a test that only
-    exercises signature verification), pass an explicit no-op callback rather than omitting
-    on_new_webhook.
+    """A new webhook arrived but on_new_webhook was never wired, so reconciliation would
+    otherwise silently never fire and the order would sit at "created" forever. A handler
+    that genuinely doesn't need reconciliation should pass an explicit no-op callback.
     """
 
 

@@ -106,17 +106,13 @@ class LedgerStore:
     ) -> None:
         path = Path(db_path)
         if read_only:
-            # Opens via a URI in mode=ro rather than relying on filesystem permissions: a pure
-            # SELECT connection never needs to create a rollback-journal file, so this works
-            # even when the containing directory itself is not writable (e.g. an HF Space's
-            # read-only app directory — see docs/PHASE_10_SPEC.md). Never runs the schema
-            # DDL/triggers here — the file is expected to already be a valid ledger (built by
-            # scripts/build_demo_ledger.py), and DDL against a read-only connection would fail
-            # anyway.
+            # A pure SELECT connection never needs to create a rollback-journal file, so
+            # mode=ro works even when the containing directory itself isn't writable. Skips
+            # the schema/trigger DDL, since the file is expected to already be a valid ledger.
             if str(path) == ":memory:":
                 raise ValueError("read_only=True is not valid with an in-memory ledger")
-            # as_uri() (not an f-string on the raw path) so this works on Windows too — a bare
-            # "file:{path}" is invalid once the path contains backslashes or a drive letter.
+            # as_uri(), not an f-string on the raw path — a bare "file:{path}" breaks once
+            # the path has backslashes or a drive letter (Windows).
             uri = path.resolve().as_uri() + "?mode=ro"
             self._conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
@@ -228,9 +224,7 @@ class LedgerStore:
             )
 
     def last_entry_id(self, transaction_id: str) -> str | None:
-        """Most recent entry for a transaction, for auto-chaining provenance (caused_by)
-        without callers having to track entry ids themselves.
-        """
+        # Lets callers chain caused_by without tracking entry ids themselves.
         row = self._conn.execute(
             "SELECT entry_id FROM ledger_entries WHERE transaction_id = ? ORDER BY seq DESC LIMIT 1",
             (transaction_id,),
@@ -255,9 +249,7 @@ class LedgerStore:
         return [self._row_to_entry(row) for row in rows]
 
     def list_transaction_ids(self) -> list[str]:
-        """Every distinct transaction_id in the store, in first-seen order — the basis for a
-        session picker (Phase 9's Session replay tab) without the caller needing raw SQL.
-        """
+        """Distinct transaction_ids in first-seen order."""
         rows = self._conn.execute(
             "SELECT transaction_id, MIN(seq) AS first_seq FROM ledger_entries "
             "GROUP BY transaction_id ORDER BY first_seq ASC"

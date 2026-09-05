@@ -4,8 +4,8 @@ upsell.make_offer or upsell.no_offer, let alone call them. authorize() is still 
 top of every handler as a defense-in-depth check (see mcp/authz.py).
 
 policy.* and payment.* are never imported here. checkout.confirm only records the buyer's
-intent to check out (a ledger entry) — the orchestrator (not yet built) is what will run the
-policy check and payment call around this signal.
+intent to check out (a ledger entry) — the orchestrator runs the policy check and payment
+call around this signal.
 """
 
 from __future__ import annotations
@@ -22,19 +22,10 @@ from agent_commerce.orchestrator.session import SessionRegistry
 from .authz import authorize
 
 _ACTOR = Actor.BUYER_AGENT
-# Caps what the agent sees per search, independent of how broad its filters are — an
-# unfiltered or over-broad query against the full catalog (72 products, each with a
-# description/tags/variants) can otherwise dump enough tokens into conversation history to
-# overflow a provider's per-request token limit on a later turn (observed live against
-# Groq's free tier: an unfiltered search returned all 72 products, and the next turn's request
-# — now carrying that whole payload — exceeded the 8,000 TPM cap outright). The ledger's own
-# SEARCH entry still records the true, untruncated count (catalog/service.py) — only what's
-# handed back to the LLM is capped.
-# Phase 8 Step 2 (history trimming, docs/PHASE_8_SPEC.md): 5, not 10 — measured tokens/call
-# during Phase 7 grew 370 -> 5,755 largely from search-result payloads sitting in growing
-# conversation history. A full product dict (description/tags/variants/cost) is far more than
-# the agent needs to decide what to search for or add next; catalog.get_details still returns
-# everything for the one item the agent is actually about to commit to.
+# Caps what the agent sees per search: an unfiltered query against the full catalog can
+# otherwise dump enough tokens into conversation history to overflow a provider's per-request
+# limit on a later turn. The ledger's own SEARCH entry still records the true, untruncated
+# count (catalog/service.py) — only what's handed back to the LLM is capped.
 _MAX_SEARCH_RESULTS = 5
 
 

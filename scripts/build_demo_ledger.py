@@ -1,5 +1,5 @@
 """Builds demo_data/demo_ledger.db — the curated, committed, read-only ledger the Streamlit
-app's Session replay tab reads (Phase 9, docs/PHASE_9_SPEC.md).
+app's Session replay tab reads.
 
 Makes NO real LLM calls: every session here is driven by FakeLLMClient with the exact same
 scripted tool-call sequences already proven correct by the test suite (see
@@ -7,7 +7,7 @@ tests/test_orchestrator_run_session.py and tests/test_orchestrator_failure_injec
 this script exists to make those same, already-verified sessions durably visible in the demo
 app, not to test anything new.
 
-Four sessions, matching the spec's "interesting sessions" list:
+Four sessions:
   1. happy path (no injection, straightforward order_created)
   2. stock_conflict, with genuine recovery (remove -> add a different item -> order_created)
   3. policy_deny_recovery, with genuine recovery (remove -> add a cheaper item -> order_created)

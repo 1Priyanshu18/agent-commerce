@@ -1,5 +1,5 @@
-"""Phase 1 exit-criteria demonstration: drive a cart to a total from Python, with the ledger
-recording every mutation and correct caused_by provenance links, and the chain verifying.
+"""Drive a cart to a total from Python, with the ledger recording every mutation and
+correct caused_by provenance links, and the chain verifying.
 """
 
 from agent_commerce.cart.models import Cart

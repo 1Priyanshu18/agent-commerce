@@ -1,7 +1,7 @@
 """A small, reusable harness for running the same cart through each upsell strategy and
-comparing margin outcomes — the "session harness" the exit criteria for this phase asks for.
-Deliberately not the Phase 8 eval harness (goals.yaml, seeds, statistics) — just enough to
-demonstrate the three strategies are interchangeable and produce comparable outcomes.
+comparing margin outcomes. Deliberately not the full eval harness (goals.yaml, seeds,
+statistics) — just enough to demonstrate the three strategies are interchangeable and
+produce comparable outcomes.
 """
 
 from __future__ import annotations

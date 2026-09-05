@@ -1,13 +1,6 @@
-"""Condition C: an LLM decides whether to offer an upsell, given the cart and the merchant's
-rules, and must justify the decision either way (offer or no-offer). Forced tool call, same
-discipline as the buyer agent's output contract — but no marker fallback here, since Phase 5
-doesn't call for one: a malformed or missing decision fails closed to NoOffer.
-
-The AgenticPay paper found buyer-side and seller-side performance are asymmetric — the same
-model negotiates differently depending on which role it plays. This strategy is the
-seller-side half of that asymmetry; the eval harness (Phase 8) is where it gets measured, but
-every decision's full reasoning is preserved here specifically so that comparison is possible
-later.
+"""An LLM decides whether to offer an upsell, given the cart and the merchant's rules, and
+must justify the decision either way. Forced tool call, no marker fallback: a malformed or
+missing decision fails closed to NoOffer.
 """
 
 from __future__ import annotations
@@ -42,12 +35,9 @@ _DECIDE_TOOL = ToolSpec(
                 "description": "Justification for this decision — mandatory whether offering or not.",
             },
         },
-        # sku/discount_pct are deliberately NOT required here even though they're only
-        # meaningful when offered=true (enforced independently in _parse() below). Groq's
-        # server-side tool-call validation rejects a call that omits a required key entirely
-        # rather than sending it as null — and a genuine no-offer decision naturally omits
-        # both, so listing them as required made every clean decline fail before a response
-        # even existed to parse (see docs/PROGRESS.md, "same nullable-field class of bug").
+        # sku/discount_pct aren't required here, even though they matter when offered=true
+        # (enforced in _parse() below): a genuine decline omits them, and Groq's server-side
+        # validation rejects a call that omits a required key rather than sending it null.
         "required": ["offered", "reasoning"],
         "additionalProperties": False,
     },
@@ -122,11 +112,8 @@ class LLMStrategy:
                 tool_choice=ToolChoice(mode="specific", tool_name="upsell_decision"),
                 max_tokens=1024,
             )
-        except Exception as e:  # noqa: BLE001 — this class promises to fail closed to NoOffer
-            # on any malformed decision; a request that fails before a response even exists
-            # (observed live: Groq's server-side tool-call validation rejecting a response
-            # that omits a nullable field entirely instead of sending it as null) is the same
-            # kind of failure as a response that parses to nonsense, just caught earlier.
+        except Exception as e:  # noqa: BLE001 — fail closed on any malformed decision,
+            # including a call that fails before a response exists to parse.
             logger.warning("upsell LLM strategy call failed: %s", e)
             return NoOffer(
                 reasoning=f"parse failure: upsell decision call failed ({e})",
@@ -160,8 +147,7 @@ class LLMStrategy:
         reasoning = data.get("reasoning") or ""
 
         if offered is not True:
-            # machine_reason stays None: this is a genuine, successfully-parsed model
-            # decision not to offer, not a fallback from any failure.
+            # machine_reason stays None: a genuine decision, not a fallback.
             return NoOffer(reasoning=reasoning or "model declined to make an offer")
 
         sku = data.get("sku")

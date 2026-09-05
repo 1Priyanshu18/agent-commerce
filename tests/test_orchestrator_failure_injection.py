@@ -1,8 +1,8 @@
-"""Phase 7: the four failure paths (stock_conflict, payment_failure, missing_webhook,
+"""The four failure paths (stock_conflict, payment_failure, missing_webhook,
 policy_deny_recovery), each reproducible on demand via BuyerSessionRunner.run(inject_failure=...)
-or the INJECT_FAILURE env var. Covers both the failure itself and, where the brief calls for
-recovery, that the buyer agent genuinely adapts (not a blind retry) and the ledger's
-provenance chain stays intact and verifiable through it.
+or the INJECT_FAILURE env var. Covers both the failure itself and, where recovery applies,
+that the buyer agent genuinely adapts (not a blind retry) and the ledger's provenance chain
+stays intact and verifiable through it.
 """
 
 import json

@@ -32,8 +32,8 @@ class CatalogStore:
 
     Stock is mutable only via set_stock() — a narrow escape hatch for the checkout-time stock
     check (orchestrator/run_session.py) and for reproducing the stock_conflict failure path on
-    demand (Phase 7). Every other field stays effectively immutable: nothing else about a
-    product changes after boot.
+    demand. Every other field stays effectively immutable: nothing else about a product
+    changes after boot.
     """
 
     def __init__(self, fixture_path: Path | str = _DEFAULT_FIXTURE) -> None:

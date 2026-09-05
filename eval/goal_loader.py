@@ -1,5 +1,6 @@
-"""Loads eval/goals.yaml into typed Goal objects. See docs/PHASE_8_SPEC.md for the goal
-design (6 categories, ground truth per goal so outcomes label automatically)."""
+"""Loads eval/goals.yaml into typed Goal objects. Each goal carries ground truth so
+outcomes label automatically.
+"""
 
 from __future__ import annotations
 

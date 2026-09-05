@@ -1,6 +1,6 @@
-"""One-command local demo, per docs/PHASE_10_SPEC.md. No API key required, no network calls:
-seeds/refreshes the curated demo ledger via scripts/build_demo_ledger.py (which drives every
-session through FakeLLMClient), prints a ledger summary, then launches the Streamlit app.
+"""One-command local demo. No API key required, no network calls: seeds/refreshes the
+curated demo ledger via scripts/build_demo_ledger.py (which drives every session through
+FakeLLMClient), prints a ledger summary, then launches the Streamlit app.
 
 Usage:
     python scripts/run_demo.py

@@ -1,9 +1,5 @@
 """In-memory transaction_id -> Cart registry shared by both MCP servers, so a cart mutated
 via the buyer server is visible to the merchant server's read-only projection at checkout.
-
-This is deliberately just shared storage, not the orchestrator's session state machine (that
-comes later, once there's a buyer agent decision loop to drive) — it exists now because both
-servers need a place to find the same Cart for a given transaction_id.
 """
 
 from __future__ import annotations

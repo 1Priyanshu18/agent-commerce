@@ -1,10 +1,8 @@
 """Constructs a correctly HMAC-signed webhook payload and feeds it to our own webhook
 handler, so the full lifecycle (order -> payment -> webhook -> reconciliation) still executes
-and still appears in the ledger, with no real Razorpay backend involved. This is what the
-deployed Space runs (PAYMENT_MODE=simulated) — no public webhook endpoint needed.
-
-Same PaymentAdapter interface as the live_test adapter; the reconciler never knows which one
-ran.
+and still appears in the ledger, with no real Razorpay backend involved and no public
+webhook endpoint needed. Same PaymentAdapter interface as the live_test adapter; the
+reconciler never knows which one ran.
 """
 
 from __future__ import annotations
@@ -40,9 +38,8 @@ class SimulatedPaymentAdapter:
 
     def suppress_webhook(self, transaction_id: str) -> None:
         """Test/demo-only: makes the next create_order() for this transaction record the
-        payment as captured (a fresh fetch_payments() genuinely reflects it) but skip
-        delivering the webhook — reproducing "payment succeeded, our webhook got lost" on
-        demand for the missing_webhook failure path (Phase 7). Never called by normal code.
+        payment as captured but skip delivering the webhook, reproducing "payment succeeded,
+        our webhook got lost" on demand. Never called by normal code.
         """
         self._suppress_webhook_for.add(transaction_id)
 

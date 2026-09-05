@@ -1,7 +1,5 @@
 """Rate limiting, retry/backoff, and a per-run call budget — provider-agnostic wrapping
-applied identically regardless of which adapter is underneath. Free tiers have hard daily
-caps and the eval grid is thousands of calls, so this exists from the start, not bolted on
-in Phase 8.
+applied identically regardless of which adapter is underneath.
 """
 
 from __future__ import annotations

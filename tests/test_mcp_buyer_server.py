@@ -14,8 +14,8 @@ async def test_catalog_search_returns_products_and_logs_search(mcp_stack: Simple
     )
     data = result.structured_content
     assert len(data["products"]) > 0
-    # The list view is trimmed to minimal fields (Phase 8 Step 2, docs/PHASE_8_SPEC.md) — no
-    # category in the payload itself, so the filter is checked against the real catalog record.
+    # The list view is trimmed to minimal fields — no category in the payload itself, so
+    # the filter is checked against the real catalog record.
     assert all(mcp_stack.catalog.get(p["sku"]).category == "Toys & Games" for p in data["products"])
     assert all(set(p.keys()) == {"sku", "name", "price_paise", "stock"} for p in data["products"])
 
